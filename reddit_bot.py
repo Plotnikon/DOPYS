@@ -12,7 +12,7 @@ import requests
 
 SUBREDDITS = [
     "PS5",
-    "gaming",
+    "playstation",
     "GamingLeaksAndRumours",
 ]
 
@@ -20,7 +20,7 @@ LIMIT = 25          # скільки останніх постів переві�
 MIN_SCORE = 0       # мінімум апвоутів (0 = без фільтра)
 SEND_VIDEO_LINKS = True   # відео слати посиланням (True) чи пропускати (False)
 
-REDDIT_LOGIN = "твій_нік_на_реддіті"   # тільки для User-Agent, реддіт цього вимагає
+REDDIT_LOGIN = "plotn1kon"   # тільки для User-Agent, реддіт цього вимагає
 
 # ────────────────────────────────────────────────
 
