@@ -16,6 +16,7 @@ import requests
 FEEDS = [
     "https://wccftech.com/topic/games/feed/",
     "https://www.polygon.com/rss/gaming/index.xml",
+    "https://www.playstationlifestyle.net/feed/",
 ]
 
 MAX_PER_FEED = 15   # скільки останніх записів перевіряти в кожній стрічці
