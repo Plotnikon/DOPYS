@@ -14,8 +14,8 @@ import requests
 # ────────────────────────────────────────────────
 
 FEEDS = [
-    "https://example.com/feed",
-    "https://another-site.com/rss.xml",
+    "https://wccftech.com/topic/games/feed/",
+    "https://www.polygon.com/rss/gaming/index.xml",
 ]
 
 MAX_PER_FEED = 15   # скільки останніх записів перевіряти в кожній стрічці
