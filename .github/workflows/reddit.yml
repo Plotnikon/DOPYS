@@ -1,0 +1,41 @@
+name: reddit-feed
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # кожні 30 хвилин
+  workflow_dispatch:          # кнопка ручного запуску
+
+permissions:
+  contents: write
+
+concurrency:
+  group: reddit-feed
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Run bot
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          REDDIT_ID: ${{ secrets.REDDIT_ID }}
+          REDDIT_SECRET: ${{ secrets.REDDIT_SECRET }}
+        run: python reddit_bot.py
+
+      - name: Save state
+        run: |
+          git config user.name "reddit-feed-bot"
+          git config user.email "actions@github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "update state"
+          git push
