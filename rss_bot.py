@@ -17,11 +17,30 @@ import trafilatura
 FEEDS = [
     "https://wccftech.com/topic/games/feed/",
     "https://www.polygon.com/rss/gaming/index.xml",
-
+    "https://insider-gaming.com/feed",
 ]
 
 MAX_PER_FEED = 15   # скільки останніх записів перевіряти в кожній стрічці
 MAX_ARTICLE_CHARS = 8000   # обмеження довжини тексту статті, що йде в Claude
+
+IGNORE_GAMES = [
+    "Atomic Heart",
+    "ILL",
+    "Escape from Tarkov",
+    "War Thunder",
+    "Crossout",
+    "Enlisted",
+    "World of Tanks",
+    "World of Warships",
+    "Pathfinder: Kingmaker",
+    "Pathfinder: Wrath of the Righteous",
+    "Beholder",
+    "Pathologic",
+    "Pokémon",
+    "Pokemon",
+    "Mario",
+    "Zelda",
+]
 
 # ─────────────────────────────────────────────
 
@@ -32,6 +51,11 @@ CLAUDE_MODEL = "claude-sonnet-5"
 
 STATE_FILE = pathlib.Path("rss_state.json")
 IMG_TAG = re.compile(r'<img[^>]+src="([^"]+)"')
+
+IGNORE_PATTERN = re.compile(
+    r'\b(' + '|'.join(re.escape(g) for g in IGNORE_GAMES) + r')\b',
+    re.IGNORECASE,
+)
 
 STYLE_GUIDE = """Ти — редактор українськомовного ігрового Telegram-каналу "Синдром Гравця" (PS Store знижки, PS Plus, Sony новини, трофеї, GTA VI). Тобі дають заголовок, посилання та повний текст статті-джерела. Твоя задача — переписати це у готовий пост у встановленому стилі каналу.
 
@@ -87,6 +111,11 @@ def clean_text(raw, limit=600):
     text = re.sub("<[^<]+?>", "", raw or "")
     text = html.unescape(text).strip()
     return text[:limit]
+
+
+def is_ignored(title, summary):
+    combined = f"{title} {summary}"
+    return bool(IGNORE_PATTERN.search(combined))
 
 
 def fetch_full_article(url):
@@ -165,6 +194,7 @@ def send_draft(entry, feed_title):
     if post.strip().upper() == "SKIP":
         print(f"  - Пропущено (не новина): {title}")
         return
+
     message = f"{post}\n\n—\nДжерело: {link}"
     tg("sendMessage", {
         "chat_id": DRAFT_TG_CHAT,
@@ -191,6 +221,7 @@ def main():
         feed_title = parsed.feed.get("title", url)
         entries = parsed.entries[:MAX_PER_FEED]
         sent = 0
+        ignored = 0
 
         for entry in reversed(entries):
             eid = entry_id(url, entry)
@@ -203,11 +234,18 @@ def main():
             if first_run:
                 continue
 
+            title = entry.get("title", "")
+            summary = entry.get("summary", "") or entry.get("description", "")
+            if is_ignored(title, summary):
+                ignored += 1
+                print(f"  - Пропущено (заборонена гра): {title}")
+                continue
+
             send_draft(entry, feed_title)
             sent += 1
             time.sleep(3)
 
-        print(f"{feed_title}: надіслано {sent}")
+        print(f"{feed_title}: надіслано {sent}, пропущено через фільтр ігор {ignored}")
 
     STATE_FILE.write_text(json.dumps({"seen": seen[-3000:]}, ensure_ascii=False))
 
