@@ -28,6 +28,8 @@ jobs:
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.RSS_TG_CHAT }}
+          DRAFT_TG_CHAT: ${{ secrets.DRAFT_TG_CHAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python rss_bot.py
 
       - name: Save state
