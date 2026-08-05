@@ -16,7 +16,6 @@ import trafilatura
 
 FEEDS = [
     "https://wccftech.com/topic/games/feed/",
-    "https://www.polygon.com/rss/gaming/index.xml",
     "https://insider-gaming.com/feed",
     "https://blog.playstation.com/feed",
 ]
@@ -128,7 +127,7 @@ STYLE_GUIDE = """Ти — редактор українськомовного і
 
 НЕ вказуй ціну для новин про вже випущені ігри, якщо новина не про знижку: оновлення, патчі, виправлення багів, нові режими чи контент для гри, яка вже давно на ринку, загальні новини/статистика про гру. Стара гра, що отримала апдейт чи патч-нот — це НІКОЛИ не привід писати ціну.
 
-Якщо один із двох випадків вище підходить — ЗАВЖДИ виконай пошук актуальної ціни через інструмент пошуку, навіть якщо ціна вже згадана в тексті статті-джерела. НЕ покладайся на ціну зі статті — вона може бути застарілою або тільки для одного регіону. Шукай у такому порядку пріоритету:
+Якщо один із двох випадків вище підходить — ЗАВЖДИ виконай пошук актуальної ціни через інструмент пошуку, навіть якщо ціна вже згадана в тексті статті-джерела. НЕ покладайся на ціну зі статті — вона може бути застарілою або тільки для одного регіону. Це ЄДИНЕ призначення інструменту пошуку — не використовуй його для перевірки чи доповнення інших фактів новини, навіть якщо стаття виглядає короткою. Шукай у такому порядку пріоритету:
 1. Спочатку шукай ціну в українському PlayStation Store (сайт store.playstation.com/uk-ua)
 2. Якщо гри немає в PS Store України — шукай ціну в Steam, бажано в гривнях
 3. Якщо ціни немає ні там, ні там (наприклад гра ще не відкрита для передзамовлення в жодному регіоні) — вкажи ціну в доларах США з офіційного джерела
@@ -147,7 +146,21 @@ Premium Edition — 2699,99 UAH
 Якщо матеріал не є новиною (наприклад: гайд, walkthrough, посібник, огляд без новинного приводу, список порад, реклама) і не відповідає жодному з описаних типів постів — виведи рівно одне слово SKIP і більше нічого.
 
 СТРУКТУРА ВІДПОВІДІ
-Виведи ЛИШЕ готовий текст поста — без пояснень, без лапок навколо, без Markdown-розмітки (без **, без #). Постав емодзі перед заголовком першим рядком. Якщо доречно, використовуй порожній рядок між вступом і списком ▫️. НІКОЛИ не додавай у тексті посту слово "Джерело" чи назву видання окремим рядком (наприклад НЕ пиши "Джерело: Insider Gaming" в кінці) — посилання на джерело додається автоматично поза текстом посту, тобі цим перейматися не треба. Пост має закінчуватись на останньому змістовному пункті чи реченні."""
+Виведи ЛИШЕ готовий текст поста — без пояснень, без лапок навколо, без Markdown-розмітки (без **, без #). Постав емодзі перед заголовком першим рядком, БЕЗ пробілу між емодзі і текстом заголовка (наприклад "🛠Заголовок", не "🛠 Заголовок"). Якщо доречно, використовуй порожній рядок між вступом і списком ▫️. НІКОЛИ не додавай у тексті посту слово "Джерело" чи назву видання окремим рядком (наприклад НЕ пиши "Джерело: Insider Gaming" в кінці) — посилання на джерело додається автоматично поза текстом посту, тобі цим перейматися не треба. Пост має закінчуватись на останньому змістовному пункті чи реченні.
+
+САМОПЕРЕВІРКА ПЕРЕД ВИВЕДЕННЯМ
+Перш ніж вивести фінальний текст, подумки перевір і виправ:
+1. Граматика, орфографія, пунктуація — без помилок
+2. Формат (список ▫️ чи абзаци) відповідає типу новини, формати не змішані
+3. Якщо є рядок з ціною — він справді доречний (лише нова гра з щойно відомою ціною або новина про знижку), інакше рядок з ціною відсутній
+4. Якщо ціна доречна і видань кілька — кожне видання на окремому рядку у форматі "[Видання] — [ціна] UAH", без слова "Ціна:"
+5. Написано "PS5", а не "PlayStation 5"
+6. Заголовок і текст НЕ у формі питання
+7. Якщо заголовок у форматі «[Суть], — звіт [Джерело]» — кома перед тире є
+8. Назви ігор і студій написані повністю, без скорочень
+9. Написано "PC" латиницею, а не "ПК" кирилицею
+10. Між емодзі на початку заголовка і текстом заголовка немає пробілу
+Виводь тільки остаточний, вже виправлений варіант — без проміжних чернеток чи позначок про виправлення."""
 
 
 def entry_id(feed_url, entry):
@@ -170,13 +183,41 @@ def is_ignored(title, summary):
     return False
 
 
+TAG_STRIP_RE = re.compile(r'<(script|style|nav|header|footer|form)[^>]*>.*?</\1>', re.IGNORECASE | re.DOTALL)
+TAG_RE = re.compile(r'<[^>]+>')
+
+
+def basic_html_to_text(html_content):
+    """Простий фолбек-екстрактор на випадок, якщо trafilatura витягла замало тексту."""
+    cleaned = TAG_STRIP_RE.sub(' ', html_content)
+    cleaned = TAG_RE.sub('\n', cleaned)
+    cleaned = html.unescape(cleaned)
+    cleaned = re.sub(r'\n{2,}', '\n', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    return cleaned.strip()
+
+
 def fetch_article(url):
     """Тягне сторінку статті. Повертає (текст, сирий_html) або (None, None), якщо не вдалось."""
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
             return None, None
-        text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+
+        try:
+            text = trafilatura.extract(
+                downloaded, include_comments=False, include_tables=True, favor_recall=True,
+            )
+        except TypeError:
+            # старіша версія trafilatura без параметра favor_recall
+            text = trafilatura.extract(downloaded, include_comments=False, include_tables=True)
+
+        # Якщо основний спосіб витягнув підозріло мало — пробуємо простіший фолбек
+        if not text or len(text) < 400:
+            fallback_text = basic_html_to_text(downloaded)
+            if fallback_text and len(fallback_text) > len(text or ""):
+                text = fallback_text
+
         text = text[:MAX_ARTICLE_CHARS] if text else None
         return text, downloaded
     except Exception as e:
@@ -229,7 +270,7 @@ def format_with_claude(title, article_text, feed_title, link):
             "max_tokens": 1500,
             "system": STYLE_GUIDE,
             "messages": [{"role": "user", "content": user_content}],
-            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
         },
         timeout=120,
     )
@@ -250,52 +291,6 @@ def linkify_title(post_text, link):
     if rest:
         return f"{linked_title}\n{html.escape(rest)}"
     return linked_title
-
-
-def review_with_claude(draft_post, title, feed_title):
-    """Другий прохід: перевіряє граматику/орфографію і коректність обраного формату."""
-    if draft_post.strip().upper() == "SKIP":
-        return draft_post
-
-    review_prompt = (
-        f"Ось чернетка поста для каналу:\n\n{draft_post}\n\n"
-        f"Оригінальний заголовок статті-джерела: {title}\n"
-        f"Видання: {feed_title}\n\n"
-        f"Перевір цей текст на граматичні, орфографічні та пунктуаційні помилки й виправ їх. "
-        f"Також перевір, чи обраний формат (список ▫️ чи абзаци) відповідає правилам зі стилю каналу "
-        f"для цього типу новини — якщо формат обрано неправильно, переформатуй текст у правильний. "
-        f"Якщо в пості є рядок(и) з ціною — перевір за правилами стилю, чи ціна тут взагалі доречна "
-        f"(лише для нових ігор з щойно відомою ціною або новин про знижку), і якщо ні — видали ці рядки. "
-        f"Якщо ціна доречна і у гри кілька видань — переконайся, що кожне видання на окремому рядку "
-        f"у форматі '[Назва видання] — [ціна] UAH' без слова 'Ціна:'. "
-        f"Перевір, що всюди написано 'PS5', а не 'PlayStation 5'. "
-        f"Перевір, що заголовок і текст посту НЕ сформульовані у формі питання — якщо є знак питання чи питальна конструкція, перепиши стверджувальним реченням. "
-        f"Якщо заголовок у форматі «[Суть], — звіт [Джерело]» — перевір, що перед тире стоїть кома. "
-        f"Перевір, що назви ігор і студій написані повністю, без скорочень (наприклад 'Rockstar Games', не 'Rockstar'; 'Grand Theft Auto V', не 'GTA 5'). "
-        f"Перевір, що всюди написано 'PC' латиницею, а не 'ПК' кирилицею. "
-        f"Виведи ЛИШЕ фінальний виправлений текст поста, без пояснень і без коментарів про те, що ти виправив."
-    )
-
-    r = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": CLAUDE_MODEL,
-            "max_tokens": 1500,
-            "system": STYLE_GUIDE,
-            "messages": [{"role": "user", "content": review_prompt}],
-        },
-        timeout=90,
-    )
-    r.raise_for_status()
-    data = r.json()
-    return "".join(
-        block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
-    ).strip()
 
 
 def tg(method, payload):
@@ -327,23 +322,13 @@ def send_draft(entry, feed_title):
         return
 
     try:
-        draft = format_with_claude(title, article_text, feed_title, link)
+        post = format_with_claude(title, article_text, feed_title, link)
     except Exception as e:
         print(f"  ! Помилка Claude API: {e}")
         return
 
-    if draft.strip().upper() == "SKIP":
-        print(f"  - Пропущено (не новина): {title}")
-        return
-
-    try:
-        post = review_with_claude(draft, title, feed_title)
-    except Exception as e:
-        print(f"  ! Помилка перевірки Claude API, шлю чернетку без другого проходу: {e}")
-        post = draft
-
     if post.strip().upper() == "SKIP":
-        print(f"  - Пропущено після перевірки (не новина): {title}")
+        print(f"  - Пропущено (не новина): {title}")
         return
 
     message = linkify_title(post, link)
