@@ -44,6 +44,11 @@ IGNORE_GAMES = [
     "Zelda",
 ]
 
+IGNORE_SOURCES = [
+    "billbil-kun",
+    "Dealabs",
+]
+
 # ─────────────────────────────────────────────
 
 TG_TOKEN = os.environ["TG_TOKEN"]
@@ -64,6 +69,11 @@ IGNORE_PATTERN_CI = re.compile(
     re.IGNORECASE,
 )
 IGNORE_PATTERN_ILL = re.compile(r'\bILL\b')  # без IGNORECASE — лише суцільні ВЕЛИКІ ILL
+
+IGNORE_SOURCES_PATTERN = re.compile(
+    r'\b(' + '|'.join(re.escape(s) for s in IGNORE_SOURCES) + r')\b',
+    re.IGNORECASE,
+)
 
 STYLE_GUIDE = """Ти — редактор українськомовного ігрового Telegram-каналу "Синдром Гравця" (PS Store знижки, PS Plus, Sony новини, трофеї, GTA VI). Тобі дають заголовок, посилання та повний текст статті-джерела. Твоя задача — переписати це у готовий пост у встановленому стилі каналу.
 
@@ -98,12 +108,12 @@ STYLE_GUIDE = """Ти — редактор українськомовного і
 - "PS Plus" скорочено (не "PlayStation Plus")
 - "PS5" та "PS5 Pro" завжди скорочено (не "PlayStation 5" / "PlayStation 5 Pro"), крім випадків коли йдеться про бренд PlayStation загалом, а не конкретну консоль
 - "Deluxe" замість "Premium" де це стосується назв видань
-- "Grand Theft Auto VI" пиши повністю з римською цифрою
 - Транслітерації: "Коджіма", "Хендерсон"
-- "PC" завжди латиницею
+- "PC" завжди латиницею, НІКОЛИ не пиши "ПК" кирилицею (наприклад "материнські плати для PC", не "для ПК")
 - "проект" (не "проєкт")
 - FPS завжди великими літерами
 - "бітемап", не "битемап"
+- Назви ігор та студій-розробників/видавців пиши повністю офіційною назвою, не скорочуй: "Rockstar Games" (не "Rockstar"), "Grand Theft Auto V" (не "GTA 5"), "Grand Theft Auto VI" (не "GTA 6" чи "GTA VI") — стосується і заголовка, і тексту поста
 - Кодові назви беруться в лапки-ялинки: «Project Назва»
 - Валюта пишеться без роздільника тисяч, наприклад "3599,10 UAH"
 - Великі круглі числа пиши словами, наприклад "600 тисяч"
@@ -153,21 +163,50 @@ def clean_text(raw, limit=600):
 
 def is_ignored(title, summary):
     combined = f"{title} {summary}"
-    return bool(IGNORE_PATTERN_CI.search(combined)) or bool(IGNORE_PATTERN_ILL.search(combined))
+    if IGNORE_PATTERN_CI.search(combined) or IGNORE_PATTERN_ILL.search(combined):
+        return True
+    if IGNORE_SOURCES_PATTERN.search(combined):
+        return True
+    return False
 
 
-def fetch_full_article(url):
-    """Тягне повний текст статті зі сторінки. Повертає None, якщо не вдалось."""
+def fetch_article(url):
+    """Тягне сторінку статті. Повертає (текст, сирий_html) або (None, None), якщо не вдалось."""
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
-            return None
+            return None, None
         text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-        if text:
-            return text[:MAX_ARTICLE_CHARS]
+        text = text[:MAX_ARTICLE_CHARS] if text else None
+        return text, downloaded
     except Exception as e:
         print(f"  ! Не вдалось витягти статтю {url}: {e}")
-    return None
+        return None, None
+
+
+OG_IMAGE_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+OG_IMAGE_RE_ALT = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:image["\']',
+    re.IGNORECASE,
+)
+VIDEO_SRC_RE = re.compile(
+    r'<video[^>]*>.*?<source[^>]+src=["\']([^"\']+\.mp4[^"\']*)["\']',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def extract_media(html_content):
+    """Шукає головне зображення (og:image) і, за можливості, пряме відеопосилання."""
+    if not html_content:
+        return None, None
+    img_match = OG_IMAGE_RE.search(html_content) or OG_IMAGE_RE_ALT.search(html_content)
+    image_url = img_match.group(1) if img_match else None
+    video_match = VIDEO_SRC_RE.search(html_content)
+    video_url = video_match.group(1) if video_match else None
+    return image_url, video_url
 
 
 def format_with_claude(title, article_text, feed_title, link):
@@ -232,6 +271,8 @@ def review_with_claude(draft_post, title, feed_title):
         f"Перевір, що всюди написано 'PS5', а не 'PlayStation 5'. "
         f"Перевір, що заголовок і текст посту НЕ сформульовані у формі питання — якщо є знак питання чи питальна конструкція, перепиши стверджувальним реченням. "
         f"Якщо заголовок у форматі «[Суть], — звіт [Джерело]» — перевір, що перед тире стоїть кома. "
+        f"Перевір, що назви ігор і студій написані повністю, без скорочень (наприклад 'Rockstar Games', не 'Rockstar'; 'Grand Theft Auto V', не 'GTA 5'). "
+        f"Перевір, що всюди написано 'PC' латиницею, а не 'ПК' кирилицею. "
         f"Виведи ЛИШЕ фінальний виправлений текст поста, без пояснень і без коментарів про те, що ти виправив."
     )
 
@@ -258,6 +299,7 @@ def review_with_claude(draft_post, title, feed_title):
 
 
 def tg(method, payload):
+    payload = {k: v for k, v in payload.items() if v is not None}
     r = requests.post(
         f"https://api.telegram.org/bot{TG_TOKEN}/{method}",
         json=payload,
@@ -272,7 +314,7 @@ def send_draft(entry, feed_title):
     link = entry.get("link", "")
     title = entry.get("title", "").strip()
 
-    article_text = fetch_full_article(link)
+    article_text, article_html = fetch_article(link)
     if not article_text:
         article_text = clean_text(entry.get("summary", "") or entry.get("description", ""), limit=2000)
 
@@ -281,7 +323,7 @@ def send_draft(entry, feed_title):
         return
 
     if is_ignored(title, article_text):
-        print(f"  - Пропущено (заборонена гра, знайдено в повному тексті статті): {title}")
+        print(f"  - Пропущено (заборонена гра або джерело, знайдено в повному тексті статті): {title}")
         return
 
     try:
@@ -305,6 +347,44 @@ def send_draft(entry, feed_title):
         return
 
     message = linkify_title(post, link)
+    image_url, video_url = extract_media(article_html)
+    caption_fits = len(message) <= 1024  # ліміт Telegram для підпису фото/відео
+
+    if video_url:
+        ok = tg("sendVideo", {
+            "chat_id": DRAFT_TG_CHAT,
+            "video": video_url,
+            "caption": message if caption_fits else None,
+            "parse_mode": "HTML",
+        })
+        if ok:
+            if not caption_fits:
+                tg("sendMessage", {
+                    "chat_id": DRAFT_TG_CHAT,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                })
+            return
+
+    if image_url:
+        ok = tg("sendPhoto", {
+            "chat_id": DRAFT_TG_CHAT,
+            "photo": image_url,
+            "caption": message if caption_fits else None,
+            "parse_mode": "HTML",
+        })
+        if ok:
+            if not caption_fits:
+                tg("sendMessage", {
+                    "chat_id": DRAFT_TG_CHAT,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                })
+            return
+
+    # Фолбек: ні відео, ні фото не вдалось надіслати чи знайти — звичайне повідомлення з прев'ю
     tg("sendMessage", {
         "chat_id": DRAFT_TG_CHAT,
         "text": message,
@@ -348,7 +428,7 @@ def main():
             summary = entry.get("summary", "") or entry.get("description", "")
             if is_ignored(title, summary):
                 ignored += 1
-                print(f"  - Пропущено (заборонена гра): {title}")
+                print(f"  - Пропущено (заборонена гра або джерело): {title}")
                 continue
 
             send_draft(entry, feed_title)
