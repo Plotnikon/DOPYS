@@ -1,0 +1,29 @@
+name: download-bot
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: download-bot
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests yt-dlp
+      - name: Run bot
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          OWNER_TG_ID: ${{ secrets.OWNER_TG_ID }}
+        run: python download_bot.py
+      - name: Save state
+        run: |
+          git config user.name "download-bot"
+          git config user.email "actions@github.com"
+          git add download_state.json
+          git diff --staged --quiet || git commit -m "update state"
+          git push
