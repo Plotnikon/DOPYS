@@ -1,12 +1,16 @@
 """
 discount_bot.py
 
-Щоденна рубрика "Найнижча ціна за увесь час" для каналу "Синдром Гравця".
+Рубрика "Найнижча ціна за увесь час" для каналу "Синдром Гравця".
+
+Розрахований на РІДКІ запуски (раз на ~14-16 днів, коли в PS Store оновлюється хвиля
+акцій) - за один запуск бере ВСІ нові ігри, що проходять фільтр (до MAX_POSTS_PER_RUN
+штук), і публікує їх одним заходом. Наступного разу вже опубліковані ігри пропускаються.
 
 Що робить:
 1. Бере список ігор зі знижками на https://psdeals.net/ua-store/collection/cheaper_than_ever
    (ці ігри зараз мають найнижчу ціну в PlayStation Store за весь час спостережень сайту).
-2. Пропускає ігри, які вже публікувались (rss_state-подібний дедуп у discount_state.json).
+2. Пропускає ігри, які вже публікувались або вже перевірялись раніше (дедуп у discount_state.json).
 3. Залишає тільки більш-менш популярні / хайпові ігри:
    - або має 2000+ відгуків у PlayStation Store,
    - або (для менш зареитингованих, у т.ч. інді) питає Claude, чи це відома/хайпова гра.
@@ -17,6 +21,7 @@ discount_bot.py
    - ціни, знижку, дату закінчення акції.
 5. Просить Claude написати текст поста в стилі каналу.
 6. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
+7. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
 
 Секрети, які потрібні в GitHub Actions (Settings -> Secrets and variables -> Actions):
 - TG_TOKEN            (той самий токен бота, що і в rss_bot.py)
@@ -30,7 +35,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
 
 import requests
 from anthropic import Anthropic
@@ -46,12 +50,19 @@ CLAUDE_MODEL = "claude-sonnet-5"
 STATE_FILE = "discount_state.json"
 
 LIST_URL = "https://psdeals.net/ua-store/collection/cheaper_than_ever"
-PAGES_TO_CHECK = 3           # скільки сторінок списку переглядати за один запуск
+PAGES_TO_CHECK = 15          # запуски рідкісні (раз на ~14-16 днів) - переглядаємо список глибше
 POPULARITY_THRESHOLD = 2000  # мін. к-сть відгуків PS Store, щоб вважати гру популярною без питання Claude
-RECHECK_AFTER_DAYS = 14      # через скільки днів повторно оцінювати гру, яку раніше визнали "непопулярною"
+MAX_POSTS_PER_RUN = 16       # запобіжник від надмірної кількості постів за один прогін
 IGNORE_GENRES = {"adult"}
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; SyndromHravtsyaBot/1.0)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+}
 
 STYLE_GUIDE = """
 Ти пишеш пост для щоденної рубрики "Найнижча ціна за увесь час" у Telegram-каналі
@@ -89,7 +100,7 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"posted_ids": [], "checked_ids": {}}
+    return {"posted_ids": [], "skipped_ids": []}
 
 
 def save_state(state):
@@ -112,13 +123,21 @@ def fetch_candidates():
     for page in range(1, PAGES_TO_CHECK + 1):
         url = LIST_URL if page == 1 else f"{LIST_URL}/{page}"
         resp = requests.get(url, headers=HEADERS, params={"sort": "best-new-deals"}, timeout=30)
+        print(f"[fetch_candidates] сторінка {page}: HTTP {resp.status_code}, {len(resp.text)} байт")
         if resp.status_code != 200:
+            print(f"[fetch_candidates] сторінка {page} не завантажилась, зупиняюсь")
             break
+        page_matches = 0
+        blocked_markers = ("Just a moment", "cf-browser-verification", "Enable JavaScript", "Access denied")
+        if any(marker in resp.text for marker in blocked_markers):
+            print(f"[fetch_candidates] схоже на блокування/захист від ботів на сторінці {page}, пропускаю")
+            continue
         for match in CARD_RE.finditer(resp.text):
             path, game_id, inner_html = match.groups()
             if game_id in seen_ids:
                 continue
             seen_ids.add(game_id)
+            page_matches += 1
             raw_text = re.sub(r"<[^>]+>", " ", inner_html)
             raw_text = re.sub(r"\s+", " ", raw_text).strip()
             candidates.append(
@@ -128,6 +147,9 @@ def fetch_candidates():
                     "raw_text": raw_text,
                 }
             )
+        print(f"[fetch_candidates] сторінка {page}: знайдено карток ігор: {page_matches}")
+        if page_matches == 0:
+            break  # далі, ймовірно, порожні сторінки - список скінчився
     return candidates
 
 
@@ -275,8 +297,11 @@ def send_to_telegram(caption, image_url):
 def main():
     state = load_state()
     posted_ids = set(state["posted_ids"])
-    checked_ids = state["checked_ids"]
-    now = datetime.now(timezone.utc)
+    skipped_ids = set(state["skipped_ids"])
+
+    # гарантуємо, що файл стану існує з першого ж запуску,
+    # навіть якщо кандидатів не знайдеться - інакше крок коміту в Actions впаде
+    save_state(state)
 
     candidates = fetch_candidates()
     print(f"Знайдено кандидатів на сторінках списку: {len(candidates)}")
@@ -284,15 +309,13 @@ def main():
     posted_this_run = 0
 
     for c in candidates:
-        game_id = c["id"]
-        if game_id in posted_ids:
-            continue
+        if posted_this_run >= MAX_POSTS_PER_RUN:
+            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
+            break
 
-        last_checked = checked_ids.get(game_id)
-        if last_checked:
-            last_checked_dt = datetime.fromisoformat(last_checked)
-            if now - last_checked_dt < timedelta(days=RECHECK_AFTER_DAYS):
-                continue
+        game_id = c["id"]
+        if game_id in posted_ids or game_id in skipped_ids:
+            continue
 
         stats = parse_candidate_stats(c["raw_text"])
 
@@ -308,16 +331,16 @@ def main():
             popular = ask_claude_is_popular(rough_title)
 
         if not popular:
-            checked_ids[game_id] = now.isoformat()
+            skipped_ids.add(game_id)
             continue
 
         detail = fetch_game_detail(c["url"])
         if not detail or not detail["image_url"] or not detail["buy_url"]:
-            checked_ids[game_id] = now.isoformat()
+            skipped_ids.add(game_id)
             continue
 
         if is_adult(detail["genre_text"]):
-            checked_ids[game_id] = now.isoformat()
+            skipped_ids.add(game_id)
             continue
 
         price_now_text = f"{stats['price_now']:.2f}".replace(".", ",") if stats["price_now"] else "?"
@@ -336,11 +359,10 @@ def main():
             posted_this_run += 1
         else:
             print(f"Не вдалось опублікувати: {detail['title']}", file=sys.stderr)
-
-        checked_ids[game_id] = now.isoformat()
+            skipped_ids.add(game_id)
 
         state["posted_ids"] = list(posted_ids)
-        state["checked_ids"] = checked_ids
+        state["skipped_ids"] = list(skipped_ids)
         save_state(state)
 
     print(f"Готово. Опубліковано нових постів: {posted_this_run}")
