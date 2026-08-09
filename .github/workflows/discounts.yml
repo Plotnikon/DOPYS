@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests anthropic cloudscraper
+        run: pip install requests anthropic
 
       - name: Run discount bot
         env:
