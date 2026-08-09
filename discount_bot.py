@@ -314,18 +314,16 @@ def is_adult(genre_text):
     return any(g in genre_text for g in IGNORE_GENRES)
 
 
-# ---------- Крок 3: офіційна сторінка PlayStation Store (英/локалізована назва) ----------
+# ---------- Крок 3: офіційна сторінка PlayStation Store (англійська назва) ----------
 
-def fetch_official_store_info(psprices_buy_url):
-    """psprices_buy_url веде через редирект на справжню store.playstation.com сторінку -
-    звідти беремо офіційну назву гри (не перекладену psprices.com) і канонічне посилання."""
+def _fetch_og_title(url):
     try:
-        resp = requests.get(psprices_buy_url, headers=HEADERS, timeout=20, allow_redirects=True)
+        resp = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
-        print(f"[fetch_official_store_info] помилка запиту: {e}")
+        print(f"[_fetch_og_title] помилка запиту {url}: {e}")
         return None, None
     if resp.status_code != 200:
-        print(f"[fetch_official_store_info] HTTP {resp.status_code}")
+        print(f"[_fetch_og_title] HTTP {resp.status_code} для {url}")
         return None, None
     title_match = re.search(r'property="og:title" content="([^"]*)"', resp.text)
     title = title_match.group(1) if title_match else None
@@ -334,7 +332,32 @@ def fetch_official_store_info(psprices_buy_url):
     return title, resp.url
 
 
+def fetch_official_store_info(psprices_buy_url):
+    """psprices_buy_url веде через редирект на справжню store.playstation.com сторінку.
+    Посилання для поста лишаємо українське (той регіон, де купують читачі), а от назву
+    беремо з АНГЛІЙСЬКОЇ версії тієї ж сторінки товару - бо український стор Sony теж
+    часто показує локалізовану назву (напр. "Брама Балдура 3"), а нам треба офіційну
+    англійську, як у прикладах."""
+    _ignored_title, uk_url = _fetch_og_title(psprices_buy_url)
+    if not uk_url:
+        return None, None
+
+    en_url = re.sub(r"/uk-ua/", "/en-us/", uk_url, count=1)
+    en_title, _ = _fetch_og_title(en_url) if en_url != uk_url else (None, None)
+
+    return en_title, uk_url
+
+
 # ---------- Крок 4: фільтр популярності ----------
+
+def _extract_text(resp):
+    """claude-sonnet-5 інколи повертає блок 'роздумів' (thinking) першим у відповіді,
+    тому не можна покладатись на resp.content[0] - треба знайти саме текстовий блок."""
+    for block in resp.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    return ""
+
 
 def looks_popular_enough(detail):
     for score in (detail["metacritic"], detail["opencritic"]):
@@ -359,7 +382,7 @@ def ask_claude_is_popular(title, publisher):
         max_tokens=10,
         messages=[{"role": "user", "content": prompt}],
     )
-    answer = resp.content[0].text.strip().lower()
+    answer = _extract_text(resp).strip().lower()
     return answer.startswith("так")
 
 
@@ -391,7 +414,7 @@ def generate_post_text(detail, final_title, final_url, formatted_date):
         system=STYLE_GUIDE,
         messages=[{"role": "user", "content": facts}],
     )
-    return resp.content[0].text.strip()
+    return _extract_text(resp).strip()
 
 
 # ---------- Крок 6: публікація в Telegram ----------
