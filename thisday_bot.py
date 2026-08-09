@@ -230,6 +230,20 @@ def fetch_games_for_month(token, target_month):
     return games_by_day
 
 
+# деякі "Deluxe/Ultimate/Digital Deluxe Edition" виходять ТОГО Ж дня, що й основна гра
+# (напр. Baldur's Gate III + Baldur's Gate 3: Digital Deluxe Edition) - Claude-перевірка на
+# "перший оригінальний реліз" не завжди ловить це надійно (для видання, випущеного день-в-
+# день з основною грою, це формально теж "перший реліз"). Тому - жорсткий, детерміністичний
+# фільтр по назві: якщо в назві є "Edition"/"видання" - ніколи не постимо, постимо ЛИШЕ
+# голу назву основної гри. Денис прямо попросив: "непотрібно писати про видання, тільки
+# саму гру основну".
+EDITION_TITLE_RE = re.compile(r"\bedition\b", re.IGNORECASE)
+
+
+def looks_like_edition_variant(title):
+    return bool(EDITION_TITLE_RE.search(title))
+
+
 def passes_prefilter(game):
     """Грубий перший фільтр по метриках IGDB - лише щоб не витрачати виклики Claude на
     явно нішеві/невідомі ігри. НЕ підстава для автоматичного схвалення."""
@@ -538,6 +552,13 @@ def main():
             image_id = (game.get("cover") or {}).get("image_id")
             if not title or not image_id:
                 continue  # без назви чи картинки постити нічого - спробуємо ще раз наступного разу
+
+            if looks_like_edition_variant(title):
+                print(f"[main] {title}: це видання/Edition, а не гола основна гра, пропускаю остаточно")
+                skipped_ids.add(game_id)
+                state["skipped_ids"] = list(skipped_ids)
+                save_state(state)
+                continue
 
             if not is_confirmed_by_gamefaqs(title, gamefaqs_titles):
                 print(f"[main] {title}: не підтверджено на gamefaqs.gamespot.com за {day} число, пропускаю (спробую ще раз пізніше)")
