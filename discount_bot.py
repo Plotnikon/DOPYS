@@ -4,35 +4,33 @@ discount_bot.py
 Рубрика "Найнижча ціна за увесь час" для каналу "Синдром Гравця".
 
 Розрахований на РІДКІ запуски (раз на ~14-16 днів, коли в PS Store оновлюється хвиля
-акцій) - за один запуск оцінює ВСІХ нових кандидатів, а тоді публікує до MAX_POSTS_PER_RUN
-НАЙПОПУЛЯРНІШИХ з них (не просто перших-ліпших по списку). Наступного разу вже
+акцій) - за один запуск публікує до MAX_POSTS_PER_RUN ігор, обраних в порядку, який дає
+сам сайт (список запитується відсортованим за MetaCritic, від найвищого - тобто
+найпопулярніші/найякісніші ігри опрацьовуються першими). Наступного разу вже
 опубліковані/перевірені ігри пропускаються.
 
-Що робить (Фаза 1 - збір і оцінка):
+Що робить:
 1. Бере список ігор зі знижками на https://psprices.com/region-ua/collection/lowest-prices-ever
-   (кожна гра в цій добірці зараз коштує стільки, скільки НІКОЛИ раніше не коштувала).
-   Окремі DLC/Season Pass відсіюються вже тут - постимо лише повні ігри й повні видання.
+   (кожна гра в цій добірці зараз коштує стільки, скільки НІКОЛИ раніше не коштувала),
+   запитуючи його з сортуванням ?ordering=desc&sort=metacritic - це вбудований фільтр
+   самого сайту, найнадійніше джерело "популярності". Окремі DLC/Season Pass відсіюються
+   вже тут - постимо лише повні ігри й повні видання.
 2. Пропускає ігри, які вже публікувались або вже точно визнані "непопулярними" (дедуп
    у discount_state.json). Технічні збої парсингу НЕ позначають гру назавжди пропущеною -
    такі ігри просто спробуються ще раз наступного запуску.
-3. Для кожної нової гри йде на її сторінку psprices.com і бере: обкладинку, оцінки
-   Metacritic/OpenCritic, жанр (щоб відсіяти Adult), видавця, ціни, знижку, дату
-   закінчення акції, список вмісту (якщо це бандл/видання).
-4. Залишає тільки більш-менш популярні/хайпові ігри - або Metacritic/OpenCritic 70+,
+3. Для кожної нової гри (в порядку зі списку) йде на її сторінку psprices.com і бере:
+   обкладинку, оцінки Metacritic/OpenCritic, жанр (щоб відсіяти Adult), видавця, ціни,
+   знижку, дату закінчення акції, список вмісту (якщо це бандл/видання).
+4. Пропускає далі тільки більш-менш популярні/хайпові ігри - або Metacritic/OpenCritic 70+,
    або (якщо оцінок немає чи вони нижчі) підтвердження від Claude, що гра дійсно широко
-   відома. Кожній такій грі присвоюється "рейтинг" (критична оцінка, або занижений
-   умовний бал для інді без оцінок, підтверджених лише Claude).
-
-Фаза 2 - публікація:
-5. Усі, хто пройшов фільтр, сортуються за рейтингом - ігри з підтвердженою високою
-   оцінкою критиків йдуть першими, менш перевірені інді-хіти - в кінець черги.
-6. Для кожної (в порядку сортування, поки не досягнуто ліміту) додатково заходить на
-   офіційну сторінку store.playstation.com і бере звідти офіційну англійську назву,
-   канонічне посилання та обкладинку в оригінальній якості (надійніше за psprices.com).
-   Якщо код товару вказує на DLC (навіть якщо це не впіймалось на етапі списку) - пропускає.
-7. Просить Claude написати текст поста в стилі каналу і перевіряє, що текст не порожній.
-8. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
-9. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
+   відома (поріг навмисно високий).
+5. Додатково заходить на офіційну сторінку store.playstation.com і бере звідти офіційну
+   англійську назву, канонічне посилання та обкладинку в оригінальній якості (надійніше
+   за psprices.com). Якщо код товару вказує на DLC (навіть якщо це не впіймалось на етапі
+   списку) - пропускає.
+6. Просить Claude написати текст поста в стилі каналу і перевіряє, що текст не порожній.
+7. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
+8. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
 
 Секрети, які потрібні в GitHub Actions (Settings -> Secrets and variables -> Actions):
 - TG_TOKEN            (той самий токен бота, що і в rss_bot.py)
@@ -61,10 +59,8 @@ CLAUDE_MODEL = "claude-sonnet-5"
 STATE_FILE = "discount_state.json"
 
 LIST_URL = "https://psprices.com/region-ua/collection/lowest-prices-ever"
-PAGES_TO_CHECK = 5           # список відсортований за останнім оновленням - нові ігри зверху
+PAGES_TO_CHECK = 5           # список запитуємо відсортованим за MetaCritic (найпопулярніші зверху)
 CRITIC_SCORE_THRESHOLD = 70  # мін. Metacritic/OpenCritic, щоб вважати гру популярною без питання Claude
-CLAUDE_APPROVED_SCORE = 65   # умовний "рейтинг" для ігор без критичних оцінок, схвалених Claude -
-                              # свідомо нижче за CRITIC_SCORE_THRESHOLD, щоб такі ігри йшли в кінець черги
 MAX_POSTS_PER_RUN = 18       # ліміт постів за прогін (~35/міс при 2 запусках на місяць)
 IGNORE_GENRES = {"adult"}
 
@@ -179,13 +175,16 @@ CONTENT_TYPE_LABELS = ("DLC", "Season Pass", "Add-On", "Add-on")
 
 
 def fetch_candidates():
-    """Повертає список {id, url} з перших кількох сторінок добірки 'найнижча ціна'.
+    """Повертає список {id, url} з перших кількох сторінок добірки 'найнижча ціна',
+    відсортованої САМИМ САЙТОМ за MetaCritic (від найвищого) - так найпопулярніші/
+    найякісніші ігри йдуть першими, і саме в такому порядку ми їх і публікуємо.
     Окремі DLC/Season Pass/доповнення відсіюються одразу тут - постимо лише повні ігри
     та повні видання (Gold/Complete/Deluxe тощо), ніколи не самостійні DLC."""
     candidates = []
     seen_ids = set()
     for page in range(1, PAGES_TO_CHECK + 1):
-        url = LIST_URL if page == 1 else f"{LIST_URL}?page={page}"
+        base = f"{LIST_URL}?ordering=desc&sort=metacritic"
+        url = base if page == 1 else f"{base}&page={page}"
         resp = requests.get(url, headers=HEADERS, timeout=30)
         print(f"[fetch_candidates] сторінка {page}: HTTP {resp.status_code}, {len(resp.text)} байт")
         if resp.status_code != 200:
@@ -519,12 +518,15 @@ def main():
     save_state(state)
 
     candidates = fetch_candidates()
-    print(f"Знайдено кандидатів на сторінках списку: {len(candidates)}")
+    print(f"Знайдено кандидатів на сторінках списку (вже відсортовано за MetaCritic): {len(candidates)}")
 
-    # ---- Фаза 1: зібрати й оцінити всіх кандидатів, нікого ще не постимо ----
-    eligible = []  # [{id, detail, score}]
+    posted_this_run = 0
 
     for c in candidates:
+        if posted_this_run >= MAX_POSTS_PER_RUN:
+            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
+            break
+
         game_id = c["id"]
         if game_id in posted_ids or game_id in skipped_ids:
             continue
@@ -556,30 +558,14 @@ def main():
             default=None,
         )
         if best_critic_score is not None and best_critic_score >= CRITIC_SCORE_THRESHOLD:
-            score = best_critic_score
+            pass  # список і так відсортований за MetaCritic - довіряємо порядку сайту
         elif ask_claude_is_popular(detail["title"], detail["publisher"]):
-            score = CLAUDE_APPROVED_SCORE
+            pass
         else:
             skipped_ids.add(game_id)
             continue
 
-        eligible.append({"id": game_id, "detail": detail, "score": score})
-
-    # ---- Фаза 2: найкращі (за оцінкою критиків) публікуються першими ----
-    eligible.sort(key=lambda x: x["score"], reverse=True)
-    print(f"Пройшли фільтр популярності: {len(eligible)}, з них опублікуємо до {MAX_POSTS_PER_RUN}")
-
-    posted_this_run = 0
-
-    for item in eligible:
-        if posted_this_run >= MAX_POSTS_PER_RUN:
-            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
-            break
-
-        game_id = item["id"]
-        detail = item["detail"]
-
-        # для фінальних кандидатів беремо офіційну назву, посилання і картинку
+        # для фінального кандидата беремо офіційну назву, посилання і картинку
         # зі store.playstation.com (надійніше і якісніше за psprices.com)
         official_title, official_url, official_image = fetch_official_store_info(detail["buy_url"])
         final_title = official_title or detail["title"]
