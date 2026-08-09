@@ -182,7 +182,7 @@ def fetch_games_for_month(token, target_month):
                 fields name, first_release_date, cover.image_id, aggregated_rating,
                        total_rating, follows, hypes,
                        involved_companies.company.name, involved_companies.developer,
-                       involved_companies.publisher, category;
+                       involved_companies.publisher, category, parent_game;
                 where first_release_date >= {int(month_start.timestamp())}
                     & first_release_date < {int(month_end.timestamp())};
                 limit 500;
@@ -201,6 +201,11 @@ def fetch_games_for_month(token, target_month):
                 seen_game_ids.add(game_id)
                 if g.get("category") not in (None, IGDB_MAIN_GAME_CATEGORY):
                     continue  # DLC/порт/ремастер/пак тощо - не основна гра
+                if g.get("parent_game") is not None:
+                    # у DLC/доповнень/експаншенів в IGDB майже завжди заповнене parent_game
+                    # (посилання на базову гру) - НАВІТЬ якщо їхнє власне category чомусь
+                    # не проставлене правильно (саме так пройшло Fallout 3: Mothership Zeta)
+                    continue
                 ts = g.get("first_release_date")
                 if ts is None:
                     continue
@@ -258,6 +263,32 @@ def _extract_text(resp):
         if getattr(block, "type", None) == "text":
             return block.text
     return ""
+
+
+def ask_claude_is_main_release(title, companies):
+    """Друга лінія захисту від DLC/доповнень (окрім category+parent_game з IGDB, які
+    іноді неправильно заповнені - саме так проскочив Fallout 3: Mothership Zeta). Питаємо
+    Claude окремо й прямо, ще до перевірки на "легендарність" франшизи - бо приналежність
+    до відомої франшизи НЕ означає, що конкретний товар є основною грою."""
+    prompt = (
+        f'Товар в базі ігор називається "{title}"'
+        + (f" (розробник/видавець: {companies})" if companies else "")
+        + ".\n\n"
+        "Чи це САМОСТІЙНА ОСНОВНА гра (повноцінний реліз, у який можна грати без обов'язкової "
+        "наявності іншої гри) - а НЕ DLC, доповнення, сезонний пропуск, набір "
+        "місій/косметики чи будь-який платний чи безкоштовний додаток ДО іншої гри?\n\n"
+        "Якщо назва звучить як підзаголовок доповнення до вже існуючої гри (напр. "
+        "\"Fallout 3: Mothership Zeta\", \"The Sims 4: Cottage Living\") - відповідай \"ні\". "
+        "Якщо сумніваєшся - відповідай \"ні\". "
+        'Відповідай ЛИШЕ одним словом: "так" або "ні".'
+    )
+    resp = anthropic_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=10,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    answer = _extract_text(resp).strip().lower()
+    return answer.startswith("так")
 
 
 def ask_claude_is_legendary(title, year, companies):
@@ -420,6 +451,13 @@ def main():
 
             year = game["_year"]
             companies = extract_companies(game)
+
+            if not ask_claude_is_main_release(title, companies):
+                print(f"[main] {title} ({year}): це DLC/доповнення, а не основна гра, пропускаю остаточно")
+                skipped_ids.add(game_id)
+                state["skipped_ids"] = list(skipped_ids)
+                save_state(state)
+                continue
 
             if not ask_claude_is_legendary(title, year, companies):
                 print(f"[main] {title} ({year}): недостатньо легендарна гра, пропускаю остаточно")
