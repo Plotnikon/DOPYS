@@ -337,6 +337,19 @@ def main():
     days_in_month = calendar.monthrange(datetime.now(timezone.utc).year, target_month)[1]
 
     token = get_igdb_token()
+
+    # ---- ТИМЧАСОВІ діагностичні запити - прибрати, коли розберемось у чому проблема ----
+    sanity1 = igdb_query(token, "games", "fields name; limit 3;")
+    print(f"[DEBUG sanity1] 'fields name; limit 3;' -> {len(sanity1)} рядків: {sanity1}")
+    sanity2 = igdb_query(token, "games", "fields name,category; where category = 0; limit 3;")
+    print(f"[DEBUG sanity2] 'where category = 0; limit 3;' -> {len(sanity2)} рядків: {sanity2}")
+    sanity3 = igdb_query(
+        token, "games",
+        "fields name,first_release_date; where first_release_date != null; limit 3;",
+    )
+    print(f"[DEBUG sanity3] 'where first_release_date != null; limit 3;' -> {len(sanity3)} рядків: {sanity3}")
+    # ---- кінець діагностики ----
+
     games_by_day = fetch_games_for_month(token, target_month)
 
     posted_this_run = 0
