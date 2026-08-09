@@ -85,7 +85,7 @@ STYLE_GUIDE = """
 
 🔥Найнижча ціна в PlayStation Store за увесь час!
 
-<a href="ПОСИЛАННЯ">Назва</a> *(вміст, якщо це бандл/видання з кількох ігор)* за X UAH замість Y UAH.
+[Назва](ПОСИЛАННЯ) *(вміст, якщо це бандл/видання з кількох ігор)* за X UAH замість Y UAH.
 
 Це найбільша знижка Z% з моменту релізу [гри/бандлу], дійсна до ДАТА.
 
@@ -93,7 +93,7 @@ STYLE_GUIDE = """
 
 🔥Найнижча ціна в PlayStation Store за увесь час!
 
-<a href="https://store.playstation.com/uk-ua/product/EP0082-CUSA04480_00-GOTYORHADIGITAL0">NieR: Automata Game of the YoRHa Edition</a> за 479,60 UAH замість 1199,00 UAH.
+[NieR: Automata Game of the YoRHa Edition](https://store.playstation.com/uk-ua/product/EP0082-CUSA04480_00-GOTYORHADIGITAL0) за 479,60 UAH замість 1199,00 UAH.
 
 Це найбільша знижка 60% з моменту релізу гри, дійсна до 1 липня.
 
@@ -101,9 +101,17 @@ STYLE_GUIDE = """
 
 🔥Найнижча ціна в PlayStation Store за увесь час!
 
-<a href="https://store.playstation.com/uk-ua/product/JP0177-PPSA31334_00-YAKUZACOMPLETE00">The Yakuza Complete Series</a> *(Yakuza 0 Director's Cut, Yakuza Kiwami, Yakuza Kiwami 2, Yakuza 3 Remastered, Yakuza 4 Remastered, Yakuza 5 Remastered, Yakuza 6: The Song of Life)* за 1599,50 UAH замість 3199,00 UAH.
+[The Yakuza Complete Series](https://store.playstation.com/uk-ua/product/JP0177-PPSA31334_00-YAKUZACOMPLETE00) *(Yakuza 0 Director's Cut, Yakuza Kiwami, Yakuza Kiwami 2, Yakuza 3 Remastered, Yakuza 4 Remastered, Yakuza 5 Remastered, Yakuza 6: The Song of Life)* за 1599,50 UAH замість 3199,00 UAH.
 
 Це найбільша знижка 50% з моменту релізу бандлу, дійсна до 15 липня.
+
+---
+
+🔥Найнижча ціна в PlayStation Store за увесь час!
+
+[Indiana Jones And The Great Circle Premium Edition](https://store.playstation.com/uk-ua/product/UP1003-PPSA26786_00-PREMIUMEDITION00) *(основна гра + DLC)* за 1499,50 UAH замість 2999,00 UAH.
+
+Це найбільша знижка 50% з моменту релізу гри, дійсна до 12 серпня.
 
 Правила:
 - Все українською, крім власних назв ігор/видань - вони завжди англійською, повністю,
@@ -112,14 +120,20 @@ STYLE_GUIDE = """
   як частина назви, а не перекладаються).
 - Заголовок "🔥Найнижча ціна в PlayStation Store за увесь час!" - БЕЗ пробілу між емодзі і
   текстом, з знаком оклику, без крапки в кінці.
-- Назва - клікабельне HTML-посилання <a href="..."> на офіційну сторінку PlayStation Store.
-- Якщо це бандл/collection/complete edition з кількома окремими іграми або сюжетними
-  доповненнями всередині - одразу після назви додай курсивом у дужках перелік цього вмісту:
-  *(Гра 1, Гра 2, DLC 1)*. У перелік включай ЛИШЕ самостійні ігри та сюжетні
-  доповнення/кампанії. НІКОЛИ не включай туди косметичні набори, скіни, аватари, звукові
-  доріжки, артбуки, ігрову валюту чи інший непринциповий бонусний контент - якщо весь наданий
-  список вмісту складається тільки з такого (напр. лише аватари) - просто НЕ додавай дужки
-  з переліком взагалі, ніби це звичайна одна гра.
+- Назва - посилання у форматі Markdown [Назва](ПОСИЛАННЯ) на офіційну сторінку PlayStation
+  Store. НЕ використовуй HTML-теги на кшталт <a href="...">.
+- Якщо до складу видання входить щось більше за просто саму гру - одразу після назви додай
+  курсивом у дужках короткий опис вмісту:
+  * Якщо це колекція/бандл з кількох ОКРЕМИХ ігор (кожна має свою назву) - перелічуй їх
+    поіменно: *(Гра 1, Гра 2, Гра 3)*.
+  * Якщо це Premium/Deluxe/Gold/Complete/Ultimate/Digital Deluxe Edition ОДНІЄЇ гри, куди
+    входить сама гра плюс сюжетне DLC/season pass/доповнення - пиши узагальнено: якщо з
+    наданих фактів зрозуміла ТОЧНА кількість DLC - вкажи число, напр. *(основна гра + 2 DLC)*;
+    якщо кількість невідома чи неточна - просто *(основна гра + DLC)* без числа. Точні назви
+    самих DLC тут не потрібні, на відміну від колекції з кількох ігор вище.
+  * НІКОЛИ не згадуй косметичні набори, скіни, аватари, звукові доріжки, артбуки, ігрову
+    валюту чи інший непринциповий бонусний контент. Якщо єдиний додатковий вміст - щось
+    подібне (напр. лише аватари) - взагалі не додавай дужки, ніби це звичайна одна гра.
 - Ціни: без розділювача тисяч, кома замість крапки (напр. 599,80 UAH, а не 599.80 UAH).
 - PS5/PS4/PS5 Pro завжди скорочено (ніколи "PlayStation 5"), PS Plus не повною назвою.
 - Ніяких запитань у тексті - тільки констатація факту.
@@ -128,8 +142,9 @@ STYLE_GUIDE = """
 - Останнє речення ЗАВЖДИ має вигляд: "Це найбільша знижка Z% з моменту релізу гри/бандлу,
   дійсна до ДАТА." - дата вже буде надана в готовому українському форматі (напр. "1 липня"),
   просто встав її як є. Це речення ніколи не можна пропускати чи скорочувати.
-- Виведи ЛИШЕ готовий текст поста (HTML, придатний для Telegram parse_mode=HTML), без
-  пояснень, без markdown-обгортки типу ```.
+- Виведи ЛИШЕ готовий текст поста у форматі Telegram Markdown (parse_mode=Markdown):
+  [текст](посилання) для лінків, *текст* для виділення дужок з вмістом бандла. Без
+  пояснень від себе, без обгортки у потрійні лапки ```.
 """
 
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -425,7 +440,7 @@ def send_to_telegram(caption, image_url):
         "chat_id": DRAFT_CHAT_ID,
         "photo": image_url,
         "caption": caption,
-        "parse_mode": "HTML",
+        "parse_mode": "Markdown",
     }
     resp = requests.post(api_url, json=payload, timeout=30)
     if resp.status_code != 200 or not resp.json().get("ok"):
@@ -436,7 +451,7 @@ def send_to_telegram(caption, image_url):
             json={
                 "chat_id": DRAFT_CHAT_ID,
                 "text": caption,
-                "parse_mode": "HTML",
+                "parse_mode": "Markdown",
                 "disable_web_page_preview": False,
             },
             timeout=30,
