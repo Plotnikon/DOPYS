@@ -1,0 +1,47 @@
+name: This Day Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 1 числа кожного місяця о 8:00 UTC - генерує пости на весь місяць, що починається
+    - cron: "0 8 1 * *"
+
+permissions:
+  contents: write
+
+jobs:
+  run-thisday-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests anthropic
+
+      - name: Run this-day bot
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          THISDAY_TG_CHAT: ${{ secrets.THISDAY_TG_CHAT }}
+          IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
+          IGDB_CLIENT_SECRET: ${{ secrets.IGDB_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python thisday_bot.py
+
+      - name: Commit updated state file
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f thisday_state.json ]; then
+            git add thisday_state.json
+            git diff --staged --quiet || git commit -m "Update thisday_state.json [skip ci]"
+            git push
+          else
+            echo "thisday_state.json ще не існує - нічого коммітити"
+          fi
