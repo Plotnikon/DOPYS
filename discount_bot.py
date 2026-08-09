@@ -10,22 +10,26 @@ discount_bot.py
 
 Що робить:
 1. Бере список ігор зі знижками на https://psprices.com/region-ua/collection/lowest-prices-ever
-   (кожна гра в цій добірці зараз коштує стільки, скільки НІКОЛИ раніше не коштувала -
-   тобто це вже готовий список "найнижча ціна за увесь час", нічого додатково перевіряти не треба).
-2. Пропускає ігри, які вже публікувались або вже перевірялись раніше (дедуп у discount_state.json).
-3. Для кожної нової гри йде на її сторінку і бере:
-   - офіційну обкладинку гри (те саме зображення, що і в PlayStation Store),
-   - посилання "купити" (веде на PlayStation Store),
+   (кожна гра в цій добірці зараз коштує стільки, скільки НІКОЛИ раніше не коштувала).
+2. Пропускає ігри, які вже публікувались або вже точно визнані "непопулярними" (дедуп
+   у discount_state.json). Технічні збої парсингу НЕ позначають гру назавжди пропущеною -
+   такі ігри просто спробуються ще раз наступного запуску.
+3. Для кожної нової гри йде на її сторінку psprices.com і бере:
+   - офіційну обкладинку гри (пряме посилання на CDN PlayStation),
    - оцінки Metacritic / OpenCritic (показник того, наскільки гра відома),
-   - жанр (щоб відсіяти Adult-контент),
-   - видавця, ціни, знижку, дату закінчення акції.
+   - жанр (щоб відсіяти Adult-контент), видавця, ціни, знижку, дату закінчення акції,
+   - список вмісту (якщо це бандл/видання з кількох ігор чи сюжетних DLC).
 4. Залишає тільки більш-менш популярні / хайпові ігри:
    - або Metacritic, або OpenCritic оцінка є і становить 70+,
-   - або (якщо оцінок немає чи вони нижчі - можливо, це інді без критичних оглядів)
-     питає Claude, чи це все одно відома/хайпова гра.
-5. Просить Claude написати текст поста в стилі каналу.
-6. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
-7. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
+   - або (якщо оцінок немає чи вони нижчі) питає Claude, чи це все одно відома/хайпова гра.
+5. Для гри, що пройшла фільтр, додатково заходить на офіційну сторінку store.playstation.com
+   (посилання з psprices.com веде саме туди) і бере звідти офіційну англійську/локалізовану
+   назву та канонічне посилання - бо назви на psprices.com часто перекладені українською
+   не так, як у самому PS Store.
+6. Просить Claude написати текст поста в стилі каналу (з готовими фактами, включно з
+   відфільтрованим списком вмісту бандла).
+7. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
+8. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
 
 Секрети, які потрібні в GitHub Actions (Settings -> Secrets and variables -> Actions):
 - TG_TOKEN            (той самий токен бота, що і в rss_bot.py)
@@ -68,31 +72,64 @@ HEADERS = {
     "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
+UKRAINIAN_MONTHS_GENITIVE = {
+    1: "січня", 2: "лютого", 3: "березня", 4: "квітня", 5: "травня", 6: "червня",
+    7: "липня", 8: "серпня", 9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня",
+}
+
 STYLE_GUIDE = """
-Ти пишеш пост для щоденної рубрики "Найнижча ціна за увесь час" у Telegram-каналі
-"Синдром Гравця" (PS Store знижки, PS Plus, Sony/PlayStation новини).
+Ти пишеш пост для рубрики "Найнижча ціна за увесь час" у Telegram-каналі "Синдром Гравця"
+(PS Store знижки, PS Plus, Sony/PlayStation новини).
 
-Формат (наслідуй цей приклад один в один за структурою):
+ОБОВ'ЯЗКОВИЙ формат, три рядки (порожній рядок між ними), більше нічого не додавай:
 
-🔥 Найнижча ціна в PlayStation Store за увесь час!
+🔥Найнижча ціна в PlayStation Store за увесь час!
 
-<a href="ПОСИЛАННЯ">Назва гри</a> *(перелік вмісту бандла курсивом, лише якщо це бандл з кількох ігор/DLC)* за X UAH замість Y UAH.
+<a href="ПОСИЛАННЯ">Назва</a> *(вміст, якщо це бандл/видання з кількох ігор)* за X UAH замість Y UAH.
 
-Це найбільша знижка Z% [з моменту релізу, якщо доречно], дійсна до ДАТА.
+Це найбільша знижка Z% з моменту релізу [гри/бандлу], дійсна до ДАТА.
+
+Приклади (наслідуй буквально цю структуру і тон):
+
+🔥Найнижча ціна в PlayStation Store за увесь час!
+
+<a href="https://store.playstation.com/uk-ua/product/EP0082-CUSA04480_00-GOTYORHADIGITAL0">NieR: Automata Game of the YoRHa Edition</a> за 479,60 UAH замість 1199,00 UAH.
+
+Це найбільша знижка 60% з моменту релізу гри, дійсна до 1 липня.
+
+---
+
+🔥Найнижча ціна в PlayStation Store за увесь час!
+
+<a href="https://store.playstation.com/uk-ua/product/JP0177-PPSA31334_00-YAKUZACOMPLETE00">The Yakuza Complete Series</a> *(Yakuza 0 Director's Cut, Yakuza Kiwami, Yakuza Kiwami 2, Yakuza 3 Remastered, Yakuza 4 Remastered, Yakuza 5 Remastered, Yakuza 6: The Song of Life)* за 1599,50 UAH замість 3199,00 UAH.
+
+Це найбільша знижка 50% з моменту релізу бандлу, дійсна до 15 липня.
 
 Правила:
-- Все українською.
-- Заголовок "🔥 Найнижча ціна в PlayStation Store за увесь час!" — з пробілом після емодзі, без крапки в кінці.
-- Назва гри — клікабельне HTML-посилання <a href="..."> на офіційну сторінку PlayStation Store.
-- Ціни: без розділювача тисяч, кома замість крапки (напр. 599,80 UAH, а не 599.80 UAH чи 599,800 UAH).
+- Все українською, крім власних назв ігор/видань - вони завжди англійською, повністю,
+  так само як офіційно називаються в PlayStation Store (без скорочень: "Grand Theft Auto V",
+  а не "GTA 5"; "Gold Edition"/"Complete Edition"/"Deluxe Edition" пишуться повністю англійською
+  як частина назви, а не перекладаються).
+- Заголовок "🔥Найнижча ціна в PlayStation Store за увесь час!" - БЕЗ пробілу між емодзі і
+  текстом, з знаком оклику, без крапки в кінці.
+- Назва - клікабельне HTML-посилання <a href="..."> на офіційну сторінку PlayStation Store.
+- Якщо це бандл/collection/complete edition з кількома окремими іграми або сюжетними
+  доповненнями всередині - одразу після назви додай курсивом у дужках перелік цього вмісту:
+  *(Гра 1, Гра 2, DLC 1)*. У перелік включай ЛИШЕ самостійні ігри та сюжетні
+  доповнення/кампанії. НІКОЛИ не включай туди косметичні набори, скіни, аватари, звукові
+  доріжки, артбуки, ігрову валюту чи інший непринциповий бонусний контент - якщо весь наданий
+  список вмісту складається тільки з такого (напр. лише аватари) - просто НЕ додавай дужки
+  з переліком взагалі, ніби це звичайна одна гра.
+- Ціни: без розділювача тисяч, кома замість крапки (напр. 599,80 UAH, а не 599.80 UAH).
 - PS5/PS4/PS5 Pro завжди скорочено (ніколи "PlayStation 5"), PS Plus не повною назвою.
-- Назви ігор і студій — повністю, без скорочень (Rockstar Games, а не Rockstar).
-- Ніяких запитань у тексті — тільки констатація факту.
-- Ніяких власних висновків чи прогнозів — тільки факти з наданих даних.
+- Ніяких запитань у тексті - тільки констатація факту.
+- Ніяких власних висновків чи прогнозів - тільки факти з наданих даних.
 - Без трикрапки в кінці.
-- Компактно: 2-4 короткі речення, без зайвої води.
-- Якщо це бандл (кілька ігор/видань в одному лоті) — додай перелік вмісту курсивом у дужках одразу після назви.
-- Виведи ЛИШЕ готовий текст поста (HTML, придатний для Telegram parse_mode=HTML), без пояснень і без markdown-обгортки.
+- Останнє речення ЗАВЖДИ має вигляд: "Це найбільша знижка Z% з моменту релізу гри/бандлу,
+  дійсна до ДАТА." - дата вже буде надана в готовому українському форматі (напр. "1 липня"),
+  просто встав її як є. Це речення ніколи не можна пропускати чи скорочувати.
+- Виведи ЛИШЕ готовий текст поста (HTML, придатний для Telegram parse_mode=HTML), без
+  пояснень, без markdown-обгортки типу ```.
 """
 
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -126,7 +163,7 @@ def fetch_candidates():
         resp = requests.get(url, headers=HEADERS, timeout=30)
         print(f"[fetch_candidates] сторінка {page}: HTTP {resp.status_code}, {len(resp.text)} байт")
         if resp.status_code != 200:
-            print(f"[fetch_candidates] сторінка {page} не завантажилась, зупиняюсь. Фрагмент: {resp.text[:300]!r}")
+            print(f"[fetch_candidates] сторінка {page} не завантажилась, зупиняюсь")
             break
         page_matches = 0
         for path, game_id in CARD_RE.findall(resp.text):
@@ -141,13 +178,12 @@ def fetch_candidates():
     return candidates
 
 
-# ---------- Крок 2: деталі гри ----------
+# ---------- Крок 2: деталі гри (psprices.com) ----------
 
 BUY_BLOCK_RE = re.compile(r'href="([^"]*?/game/buy/\d+)"[^>]*>(.*?)</a>', re.DOTALL)
 PRICE_BLOCK_RE = re.compile(
     r"([\d][\d\s]*(?:,\d{2})?)\s*₴.*?trending_down\s*(\d+)\s*%\s*([\d][\d\s]*(?:,\d{2})?)\s*₴"
 )
-UNTIL_RE = re.compile(r"until\s*(\d{2}/\d{2}/\d{4})")
 OPENCRITIC_RE = re.compile(r'href="https://opencritic\.com/game/[^"]*"[^>]*>(.*?)</a>', re.DOTALL)
 METACRITIC_RE = re.compile(r'href="https://www\.metacritic\.com/game/[^"]*"[^>]*>(.*?)</a>', re.DOTALL)
 # наступні регулярки застосовуються НЕ до сирого HTML, а до тексту з уже прибраними тегами
@@ -156,6 +192,9 @@ PUBLISHER_RE = re.compile(
     r"Publisher\s+(.+?)\s+(?:Download size|What's included|Optimization|Ratings|Audio|Genres|Trophies)"
 )
 GENRES_RE = re.compile(r"Genres\s+(.+?)\s+(?:Local co-op|Playtime|Trophies|Also known as)")
+WHATS_INCLUDED_RE = re.compile(
+    r"What's included\s+(.+?)\s+(?:Optimization|Ratings|Audio|Genres|Trophies|Video|Subtitles|Download size)"
+)
 
 
 def _clean_number(text):
@@ -171,20 +210,46 @@ def _extract_score(pattern, html):
     return int(digits.group(0)) if digits else None
 
 
-def fetch_game_detail(url, debug=False):
+def _parse_expiry(html, block_text):
+    """Пробує кілька форматів дати закінчення акції, включно зі структурованими
+    даними schema.org (JSON-LD), якщо видимий текст не збігся."""
+    for pattern in (
+        r"until\s*(\d{1,2})/(\d{1,2})/(\d{4})",   # MM/DD/YYYY
+        r"until\s*(\d{4})-(\d{1,2})-(\d{1,2})",   # YYYY-MM-DD
+    ):
+        m = re.search(pattern, block_text)
+        if m:
+            g = m.groups()
+            if len(g[0]) == 4:  # YYYY-MM-DD
+                year, month, day = int(g[0]), int(g[1]), int(g[2])
+            else:  # MM/DD/YYYY
+                month, day, year = int(g[0]), int(g[1]), int(g[2])
+            return day, month, year
+
+    m = re.search(r'"priceValidUntil"\s*:\s*"(\d{4})-(\d{2})-(\d{2})', html)
+    if m:
+        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return day, month, year
+
+    return None
+
+
+def format_ukrainian_date(parsed):
+    if not parsed:
+        return None
+    day, month, _year = parsed
+    month_name = UKRAINIAN_MONTHS_GENITIVE.get(month)
+    if not month_name:
+        return None
+    return f"{day} {month_name}"
+
+
+def fetch_game_detail(url):
     resp = requests.get(url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
         print(f"[fetch_game_detail] {url}: HTTP {resp.status_code}")
         return None
     html = resp.text
-
-    if debug:
-        print(f"[DEBUG] {url}: {len(html)} байт HTML")
-        for marker in ("game/buy/", "trending_down", "All-time low", "schedule until", "og:image", "__NEXT_DATA__", "window.__"):
-            print(f"[DEBUG] містить {marker!r}: {marker in html}")
-        idx = html.find("game/buy/")
-        if idx != -1:
-            print(f"[DEBUG] фрагмент навколо 'game/buy/': {html[max(0, idx-200):idx+400]!r}")
 
     def meta(name):
         m = re.search(rf'property="{name}" content="([^"]*)"', html)
@@ -196,30 +261,20 @@ def fetch_game_detail(url, debug=False):
     image_url = meta("og:image")
 
     buy_match = BUY_BLOCK_RE.search(html)
-    price_now = price_old = discount_pct = ends_text = None
+    price_now = price_old = discount_pct = ends_date = None
     buy_url = None
     if buy_match:
         raw_buy_path = buy_match.group(1)
         buy_url = raw_buy_path if raw_buy_path.startswith("http") else "https://psprices.com" + raw_buy_path
         block_text = re.sub(r"<[^>]+>", " ", buy_match.group(2))
         block_text = re.sub(r"\s+", " ", block_text).strip()
-        if debug:
-            print(f"[DEBUG] buy_url знайдено: {buy_url}")
-            print(f"[DEBUG] вміст блоку купівлі (без тегів): {block_text!r}")
         price_match = PRICE_BLOCK_RE.search(block_text)
-        if debug:
-            print(f"[DEBUG] price_match: {price_match.groups() if price_match else None}")
         if price_match:
             price_now = float(_clean_number(price_match.group(1)))
             discount_pct = int(price_match.group(2))
             price_old = float(_clean_number(price_match.group(3)))
-        until_match = UNTIL_RE.search(block_text)
-        ends_text = until_match.group(1) if until_match else None
-    elif debug:
-        print("[DEBUG] buy_match не знайдено взагалі (посилання /game/buy/ не збіглось)")
+        ends_date = _parse_expiry(html, block_text)
 
-    # для міток типу "Release date"/"Publisher"/"Genres" надійніше спочатку прибрати
-    # всі теги в звичайний текст, ніж покладатись на конкретну вкладеність HTML
     page_text = re.sub(r"<[^>]+>", " ", html)
     page_text = re.sub(r"\s+", " ", page_text).strip()
 
@@ -235,6 +290,9 @@ def fetch_game_detail(url, debug=False):
     publisher_match = PUBLISHER_RE.search(page_text)
     publisher = publisher_match.group(1).strip() if publisher_match else None
 
+    included_match = WHATS_INCLUDED_RE.search(page_text)
+    included_text = included_match.group(1).strip() if included_match else None
+
     return {
         "title": title,
         "image_url": image_url,
@@ -247,7 +305,8 @@ def fetch_game_detail(url, debug=False):
         "price_now": price_now,
         "price_old": price_old,
         "discount_pct": discount_pct,
-        "ends_text": ends_text,
+        "ends_date": ends_date,
+        "included_text": included_text,
     }
 
 
@@ -255,7 +314,27 @@ def is_adult(genre_text):
     return any(g in genre_text for g in IGNORE_GENRES)
 
 
-# ---------- Крок 3: фільтр популярності ----------
+# ---------- Крок 3: офіційна сторінка PlayStation Store (英/локалізована назва) ----------
+
+def fetch_official_store_info(psprices_buy_url):
+    """psprices_buy_url веде через редирект на справжню store.playstation.com сторінку -
+    звідти беремо офіційну назву гри (не перекладену psprices.com) і канонічне посилання."""
+    try:
+        resp = requests.get(psprices_buy_url, headers=HEADERS, timeout=20, allow_redirects=True)
+    except requests.RequestException as e:
+        print(f"[fetch_official_store_info] помилка запиту: {e}")
+        return None, None
+    if resp.status_code != 200:
+        print(f"[fetch_official_store_info] HTTP {resp.status_code}")
+        return None, None
+    title_match = re.search(r'property="og:title" content="([^"]*)"', resp.text)
+    title = title_match.group(1) if title_match else None
+    if title:
+        title = re.split(r"\s*\|\s*PlayStation", title)[0].strip()
+    return title, resp.url
+
+
+# ---------- Крок 4: фільтр популярності ----------
 
 def looks_popular_enough(detail):
     for score in (detail["metacritic"], detail["opencritic"]):
@@ -269,7 +348,7 @@ def ask_claude_is_popular(title, publisher):
     відома/хайпова гра (в т.ч. інді-хіти)."""
     prompt = (
         f'Гра називається "{title}"'
-        + (f' (видавець: {publisher})' if publisher else "")
+        + (f" (видавець: {publisher})" if publisher else "")
         + ". Чи є ця гра достатньо відомою/популярною/хайповою серед геймерів PlayStation, "
         "щоб про знижку на неї варто було написати пост у геймерському Telegram-каналі? "
         "Враховуй і AAA-тайтли, і відомі інді-хіти. "
@@ -284,7 +363,7 @@ def ask_claude_is_popular(title, publisher):
     return answer.startswith("так")
 
 
-# ---------- Крок 4: генерація тексту поста ----------
+# ---------- Крок 5: генерація тексту поста ----------
 
 def format_price(value):
     if value is None:
@@ -292,17 +371,19 @@ def format_price(value):
     return f"{value:.2f}".replace(".", ",")
 
 
-def generate_post_text(detail):
+def generate_post_text(detail, final_title, final_url, formatted_date):
     facts = (
-        f"Назва: {detail['title']}\n"
-        f"Посилання на PlayStation Store: {detail['buy_url']}\n"
+        f"Назва: {final_title}\n"
+        f"Посилання на PlayStation Store: {final_url}\n"
         f"Поточна ціна: {format_price(detail['price_now'])} UAH\n"
         f"Ціна без знижки: {format_price(detail['price_old'])} UAH\n"
         f"Знижка: {detail['discount_pct']}%\n"
         f"Це офіційно найнижча ціна за весь час спостережень.\n"
         f"Видавець: {detail['publisher'] or 'невідомо'}\n"
-        f"Дата релізу: {detail['release_text'] or 'невідомо'}\n"
-        f"Діє до: {detail['ends_text'] or 'невідомо'}\n"
+        f"Дійсна до (вже у форматі для вставки): {formatted_date or 'дата невідома - не вигадуй, просто опусти цю частину, якщо справді невідома'}\n"
+        f"Сирий список вмісту (якщо є) - сам вирішуй, що з цього справжній вміст бандла "
+        f"(ігри/сюжетні DLC), а що просто бонуси, які не варто перелічувати: "
+        f"{detail['included_text'] or '(даних немає, це не бандл)'}\n"
     )
     resp = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
@@ -313,7 +394,7 @@ def generate_post_text(detail):
     return resp.content[0].text.strip()
 
 
-# ---------- Крок 5: публікація в Telegram ----------
+# ---------- Крок 6: публікація в Telegram ----------
 
 def send_to_telegram(caption, image_url):
     api_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
@@ -355,7 +436,6 @@ def main():
     print(f"Знайдено кандидатів на сторінках списку: {len(candidates)}")
 
     posted_this_run = 0
-    debug_left = 2  # для перших пари кандидатів виведемо діагностику сирого HTML
 
     for c in candidates:
         if posted_this_run >= MAX_POSTS_PER_RUN:
@@ -366,18 +446,20 @@ def main():
         if game_id in posted_ids or game_id in skipped_ids:
             continue
 
-        detail = fetch_game_detail(c["url"], debug=(debug_left > 0))
-        if debug_left > 0:
-            debug_left -= 1
+        detail = fetch_game_detail(c["url"])
+
+        # технічні збої НЕ позначають гру назавжди пропущеною - просто спробуємо ще раз
+        # наступного запуску (могло бути тимчасове мережеве глюкало, або баг, який ми
+        # ще виправимо)
         if not detail or not detail["image_url"] or not detail["buy_url"]:
-            skipped_ids.add(game_id)
+            print(f"[main] неповні дані для {c['url']}, спробую ще раз наступного разу")
             continue
 
         if detail["price_now"] is None or detail["discount_pct"] is None:
-            print(f"[main] не вдалось розпарсити ціну для {detail['title']}, пропускаю")
-            skipped_ids.add(game_id)
+            print(f"[main] не вдалось розпарсити ціну для {detail['title']}, спробую ще раз наступного разу")
             continue
 
+        # а ось ці причини - вже остаточні, гру більше перевіряти не треба
         if detail["price_now"] <= 0 or detail["discount_pct"] >= 100:
             skipped_ids.add(game_id)  # 100% знижка / включено в підписку - не "купівля зі знижкою"
             continue
@@ -394,16 +476,22 @@ def main():
             skipped_ids.add(game_id)
             continue
 
-        post_text = generate_post_text(detail)
+        # для фінальних кандидатів беремо офіційну назву й посилання зі store.playstation.com
+        official_title, official_url = fetch_official_store_info(detail["buy_url"])
+        final_title = official_title or detail["title"]
+        final_url = official_url or detail["buy_url"]
+        formatted_date = format_ukrainian_date(detail["ends_date"])
+
+        post_text = generate_post_text(detail, final_title, final_url, formatted_date)
 
         ok = send_to_telegram(post_text, detail["image_url"])
         if ok:
-            print(f"Опубліковано: {detail['title']}")
+            print(f"Опубліковано: {final_title}")
             posted_ids.add(game_id)
             posted_this_run += 1
         else:
-            print(f"Не вдалось опублікувати: {detail['title']}", file=sys.stderr)
-            skipped_ids.add(game_id)
+            print(f"Не вдалось опублікувати: {final_title}", file=sys.stderr)
+            # тут теж не позначаємо остаточно пропущеною - могла бути тимчасова помилка Telegram
 
         state["posted_ids"] = list(posted_ids)
         state["skipped_ids"] = list(skipped_ids)
