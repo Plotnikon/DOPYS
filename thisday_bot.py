@@ -14,7 +14,10 @@ thisday_bot.py
 Формат поста (рівно одне речення, без нічого зайвого):
 🎉Цього дня, 26 січня 2010 року, відбувся реліз Mass Effect 2.
 
-Якщо в один день вийшло кілька культових ігор (в різні роки) - кожна йде окремим постом.
+Якщо в один день вийшло кілька культових ігор (в різні роки) - усі йдуть ОДНИМ постом:
+речення про кожну гру - окремим абзацом у тому самому підписі, а картинки - одним альбомом
+(до 10 фото в одному пості - обмеження самого Telegram; якщо ігор більше 10, зайві підуть
+наступним постом).
 
 Що робить:
 1. Отримує токен доступу до IGDB API (Twitch Client Credentials flow) - живе типово ~60 днів,
@@ -33,8 +36,9 @@ thisday_bot.py
    високий.
 6. Для тих, хто пройшов - формує текст поста за жорстким шаблоном (без участі Claude, щоб
    формат ніколи не "поплив") і бере офіційний бокс-арт з IGDB у максимальній якості.
-7. Публікує всі готові пости (фото + підпис) у приватний Telegram-канал-чернетку, з паузою
-   між повідомленнями, щоб не впертись у ліміти Telegram.
+7. Групує ігри одного дня в один пост (альбом фото + один спільний підпис із реченням про
+   кожну гру) і публікує в приватний Telegram-канал-чернетку, з паузою між постами, щоб не
+   впертись у ліміти Telegram.
 8. Дедуп (thisday_state.json, комітиться в репозиторій, як і в інших ботах): posted_ids -
    вже опубліковані ігри (ніколи не повторюються), skipped_ids - остаточно визнані
    "недостатньо легендарними" (якщо пізніше зміниш поріг у ask_claude_is_legendary - можна
@@ -259,18 +263,30 @@ def _extract_text(resp):
 def ask_claude_is_legendary(title, year, companies):
     """Висока оцінка в IGDB - показник ЯКОСТІ, не впізнаваності. Багато нішевих ігор мають
     хороші оцінки, лишаючись невідомими широкій аудиторії (той самий урок, що і з рубрикою
-    знижок). Тому фінальне рішення - завжди за цією перевіркою, незалежно від метрик IGDB."""
+    знижок). Тому фінальне рішення - завжди за цією перевіркою, незалежно від метрик IGDB.
+
+    Поріг навмисно ДУЖЕ високий (за явним запитом Дениса): тільки топові AAA-франшизи, які
+    досі активні й досі випускають нові ігри - НЕ будь-яка "відома в певних колах" гра і НЕ
+    одноразовий культовий інді-хіт без продовжень (напр. The Stanley Parable, Undertale -
+    відомі, але це НЕ те, що треба - вони одноразові, без активної франшизи)."""
     prompt = (
         f'Гра називається "{title}", вийшла у {year} році'
         + (f" (розробник/видавець: {companies})" if companies else "")
         + ".\n\n"
-        "Чи ця гра ДІЙСНО легендарна/культова/широко відома серед геймерів - тобто "
-        "більшість геймерів впізнає назву або хоча б чула про неї? Це має бути помітний "
-        "AAA-реліз від великої/відомої студії чи видавця, або справжній культовий/вірусний "
-        "хіт (в т.ч. інді, якщо він дійсно широко відомий, напр. Minecraft, Undertale, "
-        "Stardew Valley).\n\n"
-        "ВАЖЛИВО: непогана чи навіть висока оцінка критиків сама по собі НЕ означає широку "
-        "відомість - середньостатистична 'якісна, але нішева гра' повинна отримати 'ні'. "
+        "Чи ця гра належить до ТОП-рівня AAA-франшиз, які знає практично кожен геймер і "
+        "які досі активні - франшиза й досі випускає нові ігри чи має активну спільноту "
+        "(напр. рівень Call of Duty, Grand Theft Auto, FIFA/EA Sports FC, Assassin's Creed, "
+        "Final Fantasy, Resident Evil, The Elder Scrolls, God of War, Spider-Man, Zelda, "
+        "Mario, Diablo, Elden Ring/Dark Souls, Halo, Uncharted, Minecraft, Fortnite, "
+        "Cyberpunk 2077)?\n\n"
+        "Відповідай \"ні\", якщо це:\n"
+        "- одноразова культова чи навіть дуже відома інді-гра БЕЗ активної франшизи/сиквелів "
+        "(напр. The Stanley Parable, Undertale, Braid, Journey) - хай навіть про неї всі "
+        "чули, вона не підходить під цю рубрику;\n"
+        "- гра середнього рівня відомості, нішева, чи відома тільки фанатам жанру, навіть "
+        "з хорошими оцінками критиків;\n"
+        "- франшиза, яка вже давно закрита/забута і нових ігор не випускає.\n\n"
+        "Поріг НАВМИСНО дуже високий - беремо лише справжні топові, усім відомі назви. "
         "Якщо сумніваєшся - відповідай \"ні\". "
         'Відповідай ЛИШЕ одним словом: "так" або "ні".'
     )
@@ -305,7 +321,12 @@ def get_cover_url(image_id):
 
 # ---------- Крок 5: публікація в Telegram ----------
 
+MAX_MEDIA_GROUP_SIZE = 10  # ліміт Telegram на кількість фото в одному "альбомі"-пості
+
+
 def send_to_telegram(caption, image_url):
+    """Один пост - одна гра (фото + підпис). Використовується, якщо на день випала
+    рівно 1 гра - у Telegram sendMediaGroup вимагає МІНІМУМ 2 елементи."""
     api_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
     payload = {"chat_id": CHAT_ID, "photo": image_url, "caption": caption}
     resp = requests.post(api_url, json=payload, timeout=30)
@@ -317,6 +338,35 @@ def send_to_telegram(caption, image_url):
         resp = requests.post(api_url, json=payload, timeout=30)
 
     if resp.status_code != 200 or not resp.json().get("ok"):
+        fallback_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        resp = requests.post(
+            fallback_url,
+            json={"chat_id": CHAT_ID, "text": caption},
+            timeout=30,
+        )
+    return resp.status_code == 200 and resp.json().get("ok")
+
+
+def send_media_group_to_telegram(caption, image_urls):
+    """Кілька ігор одного дня - ОДИН пост з альбомом фото (до 10 штук), підпис із усіма
+    реченнями йде під альбомом одним блоком (Telegram показує caption першого елемента
+    як підпис усього альбому - тому підпис ставимо лише на перше фото)."""
+    media = [{"type": "photo", "media": url} for url in image_urls]
+    media[0]["caption"] = caption
+
+    api_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMediaGroup"
+    payload = {"chat_id": CHAT_ID, "media": media}
+    resp = requests.post(api_url, json=payload, timeout=30)
+
+    if resp.status_code == 429:
+        retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+        print(f"[send_media_group_to_telegram] flood control, чекаю {retry_after}с")
+        time.sleep(retry_after + 1)
+        resp = requests.post(api_url, json=payload, timeout=30)
+
+    if resp.status_code != 200 or not resp.json().get("ok"):
+        print(f"[send_media_group_to_telegram] не вдалось: HTTP {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        # запасний варіант - хоча б текстом, без фото (краще ніж нічого)
         fallback_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         resp = requests.post(
             fallback_url,
@@ -340,21 +390,22 @@ def main():
     token = get_igdb_token()
     games_by_day = fetch_games_for_month(token, target_month)
 
-    posted_this_run = 0
+    posted_this_run = 0  # рахуємо ІГРИ (не пости) - один пост може містити до 10 ігор
 
     for day in range(1, days_in_month + 1):
         if posted_this_run >= MAX_POSTS_PER_RUN:
-            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
+            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} ігор за прогін, зупиняюсь")
             break
 
         candidates = games_by_day.get(day, [])
         # у межах дня - в хронологічному порядку років
         candidates.sort(key=lambda g: g["_year"])
 
-        for game in candidates:
-            if posted_this_run >= MAX_POSTS_PER_RUN:
-                break
+        # спочатку відбираємо ВСІХ гідних кандидатів цього дня, і лише потім постимо -
+        # щоб зібрати їх усіх в один пост (до MAX_MEDIA_GROUP_SIZE)
+        approved = []  # [{"game_id", "title", "year", "image_url"}]
 
+        for game in candidates:
             game_id = str(game["id"])
             if game_id in posted_ids or game_id in skipped_ids:
                 continue
@@ -377,25 +428,48 @@ def main():
                 save_state(state)
                 continue
 
-            image_url = get_cover_url(image_id)
-            post_text = build_post_text(title, day, target_month, year)
+            approved.append({
+                "game_id": game_id,
+                "title": title,
+                "year": year,
+                "image_url": get_cover_url(image_id),
+            })
 
-            ok = send_to_telegram(post_text, image_url)
-            if ok:
-                print(f"Опубліковано: {title} ({year}), {day} число")
-                posted_ids.add(game_id)
-                posted_this_run += 1
+        if not approved:
+            continue
+
+        # ділимо на пачки по MAX_MEDIA_GROUP_SIZE (запас на дуже гучні дні з >10 релізами)
+        for i in range(0, len(approved), MAX_MEDIA_GROUP_SIZE):
+            if posted_this_run >= MAX_POSTS_PER_RUN:
+                break
+            chunk = approved[i:i + MAX_MEDIA_GROUP_SIZE]
+
+            caption = "\n\n".join(
+                build_post_text(g["title"], day, target_month, g["year"]) for g in chunk
+            )
+
+            if len(chunk) == 1:
+                ok = send_to_telegram(caption, chunk[0]["image_url"])
             else:
-                print(f"Не вдалось опублікувати: {title}", file=sys.stderr)
+                ok = send_media_group_to_telegram(caption, [g["image_url"] for g in chunk])
+
+            if ok:
+                titles = ", ".join(f'{g["title"]} ({g["year"]})' for g in chunk)
+                print(f"Опубліковано ({day} число, {len(chunk)} ігор): {titles}")
+                for g in chunk:
+                    posted_ids.add(g["game_id"])
+                posted_this_run += len(chunk)
+            else:
+                print(f"Не вдалось опублікувати пост за {day} число", file=sys.stderr)
                 # тимчасова помилка Telegram - не позначаємо остаточно, спробуємо ще раз
 
             state["posted_ids"] = list(posted_ids)
             state["skipped_ids"] = list(skipped_ids)
             save_state(state)
 
-            time.sleep(1.2)  # пауза між повідомленнями, щоб не впертись у ліміти Telegram
+            time.sleep(1.5)  # пауза між постами, щоб не впертись у ліміти Telegram
 
-    print(f"Готово. Опубліковано нових постів: {posted_this_run}")
+    print(f"Готово. Опубліковано нових ігор: {posted_this_run}")
 
 
 if __name__ == "__main__":
