@@ -8,6 +8,9 @@ on:
     # тож окремий зовнішній cron (як для rss.yml) тут не потрібен.
     - cron: "0 9 1,17 * *"
 
+permissions:
+  contents: write
+
 jobs:
   run-discount-bot:
     runs-on: ubuntu-latest
