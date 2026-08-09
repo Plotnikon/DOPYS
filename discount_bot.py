@@ -36,6 +36,7 @@ import os
 import re
 import sys
 
+import cloudscraper
 import requests
 from anthropic import Anthropic
 
@@ -56,13 +57,14 @@ MAX_POSTS_PER_RUN = 16       # запобіжник від надмірної к
 IGNORE_GENRES = {"adult"}
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
 }
+
+# psdeals.net стоїть за Cloudflare і блокує запити з дата-центрів (напр. GitHub Actions)
+# звичайним requests навіть з правильним User-Agent - cloudscraper імітує браузер,
+# щоб пройти цей захист.
+scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
 
 STYLE_GUIDE = """
 Ти пишеш пост для щоденної рубрики "Найнижча ціна за увесь час" у Telegram-каналі
@@ -122,10 +124,10 @@ def fetch_candidates():
     seen_ids = set()
     for page in range(1, PAGES_TO_CHECK + 1):
         url = LIST_URL if page == 1 else f"{LIST_URL}/{page}"
-        resp = requests.get(url, headers=HEADERS, params={"sort": "best-new-deals"}, timeout=30)
+        resp = scraper.get(url, headers=HEADERS, params={"sort": "best-new-deals"}, timeout=30)
         print(f"[fetch_candidates] сторінка {page}: HTTP {resp.status_code}, {len(resp.text)} байт")
         if resp.status_code != 200:
-            print(f"[fetch_candidates] сторінка {page} не завантажилась, зупиняюсь")
+            print(f"[fetch_candidates] сторінка {page} не завантажилась, зупиняюсь. Фрагмент відповіді: {resp.text[:300]!r}")
             break
         page_matches = 0
         blocked_markers = ("Just a moment", "cf-browser-verification", "Enable JavaScript", "Access denied")
@@ -198,7 +200,7 @@ def ask_claude_is_popular(title):
 # ---------- Крок 3: деталі гри ----------
 
 def fetch_game_detail(url):
-    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp = scraper.get(url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
         return None
     html = resp.text
