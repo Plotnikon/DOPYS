@@ -171,12 +171,20 @@ def _extract_score(pattern, html):
     return int(digits.group(0)) if digits else None
 
 
-def fetch_game_detail(url):
+def fetch_game_detail(url, debug=False):
     resp = requests.get(url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
         print(f"[fetch_game_detail] {url}: HTTP {resp.status_code}")
         return None
     html = resp.text
+
+    if debug:
+        print(f"[DEBUG] {url}: {len(html)} байт HTML")
+        for marker in ("game/buy/", "trending_down", "All-time low", "schedule until", "og:image", "__NEXT_DATA__", "window.__"):
+            print(f"[DEBUG] містить {marker!r}: {marker in html}")
+        idx = html.find("game/buy/")
+        if idx != -1:
+            print(f"[DEBUG] фрагмент навколо 'game/buy/': {html[max(0, idx-200):idx+400]!r}")
 
     def meta(name):
         m = re.search(rf'property="{name}" content="([^"]*)"', html)
@@ -194,13 +202,21 @@ def fetch_game_detail(url):
         raw_buy_path = buy_match.group(1)
         buy_url = raw_buy_path if raw_buy_path.startswith("http") else "https://psprices.com" + raw_buy_path
         block_text = re.sub(r"<[^>]+>", " ", buy_match.group(2))
+        block_text = re.sub(r"\s+", " ", block_text).strip()
+        if debug:
+            print(f"[DEBUG] buy_url знайдено: {buy_url}")
+            print(f"[DEBUG] вміст блоку купівлі (без тегів): {block_text!r}")
         price_match = PRICE_BLOCK_RE.search(block_text)
+        if debug:
+            print(f"[DEBUG] price_match: {price_match.groups() if price_match else None}")
         if price_match:
             price_now = float(_clean_number(price_match.group(1)))
             discount_pct = int(price_match.group(2))
             price_old = float(_clean_number(price_match.group(3)))
         until_match = UNTIL_RE.search(block_text)
         ends_text = until_match.group(1) if until_match else None
+    elif debug:
+        print("[DEBUG] buy_match не знайдено взагалі (посилання /game/buy/ не збіглось)")
 
     # для міток типу "Release date"/"Publisher"/"Genres" надійніше спочатку прибрати
     # всі теги в звичайний текст, ніж покладатись на конкретну вкладеність HTML
@@ -339,6 +355,7 @@ def main():
     print(f"Знайдено кандидатів на сторінках списку: {len(candidates)}")
 
     posted_this_run = 0
+    debug_left = 2  # для перших пари кандидатів виведемо діагностику сирого HTML
 
     for c in candidates:
         if posted_this_run >= MAX_POSTS_PER_RUN:
@@ -349,7 +366,9 @@ def main():
         if game_id in posted_ids or game_id in skipped_ids:
             continue
 
-        detail = fetch_game_detail(c["url"])
+        detail = fetch_game_detail(c["url"], debug=(debug_left > 0))
+        if debug_left > 0:
+            debug_left -= 1
         if not detail or not detail["image_url"] or not detail["buy_url"]:
             skipped_ids.add(game_id)
             continue
