@@ -5,8 +5,11 @@ thisday_bot.py
 
 Розрахований на РІДКІ запуски (1 числа кожного місяця) - за один запуск генерує пости
 для КОЖНОГО дня місяця, що починається (1-28/30/31), про легендарні/культові ігри, які
-офіційно вийшли саме в цей день місяця (в будь-якому році). Дні без по-справжньому гучних
-релізів просто пропускаються - без порожніх постів.
+офіційно вийшли (або ще вийдуть, якщо реліз вже заплановано саме на цей день цього ж
+місяця/року - напр. наперед відомий реліз AAA-гри пізніше цього місяця) саме в цей день
+місяця (в будь-якому році). Дні без по-справжньому гучних релізів просто пропускаються -
+без порожніх постів. Публікація в реальний канал - вручну, в потрібний день, тож фрази на
+кшталт "відбувся реліз" встигають стати правдою до моменту публікації.
 
 Формат поста (рівно одне речення, без нічого зайвого):
 🎉Цього дня, 26 січня 2010 року, відбувся реліз Mass Effect 2.
@@ -17,9 +20,9 @@ thisday_bot.py
 1. Отримує токен доступу до IGDB API (Twitch Client Credentials flow) - живе типово ~60 днів,
    тому просто отримуємо новий на кожен запуск, без кешування.
 2. Для місяця, що починається, проходить по роках від START_YEAR до поточного і для кожного
-   року запитує в IGDB (games endpoint) усі ОСНОВНІ ігри (category = 0, тобто не DLC/порт/
-   ремастер/пак і т.д.) з датою релізу в цьому місяці цього року. Для поточного року - не
-   заходить за межі "зараз", щоб не написати про гру, яка ще не вийшла.
+   року запитує в IGDB (games endpoint) усі ОСНОВНІ ігри (не DLC/порт/ремастер/пак і т.д.) з
+   датою релізу в цьому місяці цього року - включно з поточним роком/місяцем ЦІЛКОМ (навіть
+   дні, які ще не настали, якщо реліз уже офіційно анонсовано на конкретну дату).
 3. Групує знайдені ігри по дню місяця (день релізу).
 4. Попередньо відсіює зовсім невідомі/нішеві ігри по метриках IGDB (рейтинг критиків/
    користувачів, кількість "фоловерів"/антісипації) - це лише грубий перший фільтр, щоб не
@@ -123,12 +126,8 @@ def get_igdb_token():
     return resp.json()["access_token"]
 
 
-_debug_dumped = False
-
-
 def igdb_query(token, endpoint, body):
     """Запит до IGDB API (Apicalypse-синтаксис у тілі запиту)."""
-    global _debug_dumped
     resp = requests.post(
         f"https://api.igdb.com/v4/{endpoint}",
         headers={
@@ -143,22 +142,16 @@ def igdb_query(token, endpoint, body):
     if resp.status_code != 200:
         print(f"[igdb_query] {endpoint}: HTTP {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
         return []
-    rows = resp.json()
-    if not _debug_dumped:
-        # одноразовий діагностичний дамп - щоб бачити, що ІГДБ реально повертає,
-        # якщо запити "успішні", але порожні
-        print(f"[igdb_query DEBUG] endpoint={endpoint}, body={body.strip()[:300]!r}")
-        print(f"[igdb_query DEBUG] HTTP {resp.status_code}, {len(rows)} рядків, сира відповідь: {resp.text[:1000]}")
-        _debug_dumped = True
-    return rows
+    return resp.json()
 
 
 # ---------- Крок 2: збір ігор для місяця, що починається ----------
 
 def fetch_games_for_month(token, target_month):
     """Повертає {день_місяця: [ігри]} - для кожного року від START_YEAR до поточного
-    запитує в IGDB усі ОСНОВНІ ігри (не DLC/порти/ремастери), що вийшли в цьому місяці
-    цього року, і групує їх по дню релізу. Для поточного року не заходить у майбутнє."""
+    запитує в IGDB усі ОСНОВНІ ігри (не DLC/порти/ремастери) з датою релізу в цьому місяці
+    цього року, і групує їх по дню релізу. Включає й ще не вийшлі, але вже заплановані
+    релізи поточного місяця/року (див. примітку нижче)."""
     now = datetime.now(timezone.utc)
     current_year = now.year
 
@@ -172,8 +165,10 @@ def fetch_games_for_month(token, target_month):
         else:
             month_end = datetime(year, target_month + 1, 1, tzinfo=timezone.utc)
 
-        if year == current_year:
-            month_end = min(month_end, now)  # не заходити в ще не вийшлі ігри
+        # ПРИМІТКА: current_year НЕ обрізається до "зараз" - навмисно. Пости готуються
+        # заздалегідь пачкою на весь місяць (і вже вийшли, і ще заплановані релізи цього ж
+        # місяця, напр. "15 вересня вийде Marvel's Wolverine") - Денис публікує їх вручну
+        # у відповідний день, тож до моменту публікації дата вже настане.
         if month_start >= month_end:
             continue
 
@@ -185,17 +180,23 @@ def fetch_games_for_month(token, target_month):
                        involved_companies.company.name, involved_companies.developer,
                        involved_companies.publisher, category;
                 where first_release_date >= {int(month_start.timestamp())}
-                    & first_release_date < {int(month_end.timestamp())}
-                    & category = {IGDB_MAIN_GAME_CATEGORY};
+                    & first_release_date < {int(month_end.timestamp())};
                 limit 500;
                 offset {offset};
             """
+            # ПРИМІТКА: фільтр "category = 0" (основна гра) навмисно НЕ в самому запиті -
+            # у IGDB є відомий баг/особливість: 0 - це "нульове" значення enum, і
+            # "where category = 0" на боці сервера мовчки не знаходить нічого (перевірено:
+            # інші фільтри працюють, саме "category = 0" повертав 0 рядків завжди).
+            # Тому фільтруємо по category локально, вже після отримання даних.
             results = igdb_query(token, "games", body)
             for g in results:
                 game_id = g.get("id")
                 if game_id is None or game_id in seen_game_ids:
                     continue
                 seen_game_ids.add(game_id)
+                if g.get("category") not in (None, IGDB_MAIN_GAME_CATEGORY):
+                    continue  # DLC/порт/ремастер/пак тощо - не основна гра
                 ts = g.get("first_release_date")
                 if ts is None:
                     continue
@@ -337,19 +338,6 @@ def main():
     days_in_month = calendar.monthrange(datetime.now(timezone.utc).year, target_month)[1]
 
     token = get_igdb_token()
-
-    # ---- ТИМЧАСОВІ діагностичні запити - прибрати, коли розберемось у чому проблема ----
-    sanity1 = igdb_query(token, "games", "fields name; limit 3;")
-    print(f"[DEBUG sanity1] 'fields name; limit 3;' -> {len(sanity1)} рядків: {sanity1}")
-    sanity2 = igdb_query(token, "games", "fields name,category; where category = 0; limit 3;")
-    print(f"[DEBUG sanity2] 'where category = 0; limit 3;' -> {len(sanity2)} рядків: {sanity2}")
-    sanity3 = igdb_query(
-        token, "games",
-        "fields name,first_release_date; where first_release_date != null; limit 3;",
-    )
-    print(f"[DEBUG sanity3] 'where first_release_date != null; limit 3;' -> {len(sanity3)} рядків: {sanity3}")
-    # ---- кінець діагностики ----
-
     games_by_day = fetch_games_for_month(token, target_month)
 
     posted_this_run = 0
