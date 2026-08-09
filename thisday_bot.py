@@ -189,7 +189,7 @@ def fetch_games_for_month(token, target_month):
                 fields name, first_release_date, cover.image_id, aggregated_rating,
                        total_rating, follows, hypes,
                        involved_companies.company.name, involved_companies.developer,
-                       involved_companies.publisher, category, parent_game;
+                       involved_companies.publisher, category, parent_game, genres.name;
                 where first_release_date >= {int(month_start.timestamp())}
                     & first_release_date < {int(month_end.timestamp())};
                 limit 500;
@@ -242,6 +242,14 @@ EDITION_TITLE_RE = re.compile(r"\bedition\b", re.IGNORECASE)
 
 def looks_like_edition_variant(title):
     return bool(EDITION_TITLE_RE.search(title))
+
+
+def is_sports_game(game):
+    """Денис попросив ігнорувати ВСІ спортивні ігри (FC/FIFA, NBA 2K, Madden NFL, WWE 2K,
+    NHL тощо) - щорічні спортивні франшизи не цікаві для цієї рубрики, навіть якщо дуже
+    популярні. Перевіряємо за жанром з IGDB ("Sport")."""
+    genres = game.get("genres") or []
+    return any((g.get("name") or "").strip().lower() == "sport" for g in genres)
 
 
 def passes_prefilter(game):
@@ -412,6 +420,9 @@ def ask_claude_is_legendary(title, year, companies):
         "- одноразова культова чи навіть дуже відома інді-гра БЕЗ активної франшизи/сиквелів "
         "(напр. The Stanley Parable, Undertale, Braid, Journey) - якщо вона САМА не "
         "номінувалась на головні нагороди року;\n"
+        "- БУДЬ-ЯКА спортивна гра (футбол/FIFA/EA Sports FC, баскетбол/NBA 2K, американський "
+        "футбол/Madden NFL, реслінг/WWE 2K, хокей/NHL тощо) - щорічні спортивні симулятори "
+        "ігноруємо ЗАВЖДИ, незалежно від популярності чи оцінок;\n"
         "- гра середнього рівня відомості, нішева, чи відома тільки фанатам жанру, навіть "
         "з хорошими оцінками критиків;\n"
         "- франшиза, яка вже давно закрита/забута і нових ігор не випускає.\n\n"
@@ -552,6 +563,13 @@ def main():
             image_id = (game.get("cover") or {}).get("image_id")
             if not title or not image_id:
                 continue  # без назви чи картинки постити нічого - спробуємо ще раз наступного разу
+
+            if is_sports_game(game):
+                print(f"[main] {title}: спортивна гра, ігнорую за жанром")
+                skipped_ids.add(game_id)
+                state["skipped_ids"] = list(skipped_ids)
+                save_state(state)
+                continue
 
             if looks_like_edition_variant(title):
                 print(f"[main] {title}: це видання/Edition, а не гола основна гра, пропускаю остаточно")
