@@ -4,32 +4,35 @@ discount_bot.py
 Рубрика "Найнижча ціна за увесь час" для каналу "Синдром Гравця".
 
 Розрахований на РІДКІ запуски (раз на ~14-16 днів, коли в PS Store оновлюється хвиля
-акцій) - за один запуск бере ВСІ нові ігри, що проходять фільтр (до MAX_POSTS_PER_RUN
-штук), і публікує їх одним заходом. Наступного разу вже опубліковані/перевірені ігри
-пропускаються.
+акцій) - за один запуск оцінює ВСІХ нових кандидатів, а тоді публікує до MAX_POSTS_PER_RUN
+НАЙПОПУЛЯРНІШИХ з них (не просто перших-ліпших по списку). Наступного разу вже
+опубліковані/перевірені ігри пропускаються.
 
-Що робить:
+Що робить (Фаза 1 - збір і оцінка):
 1. Бере список ігор зі знижками на https://psprices.com/region-ua/collection/lowest-prices-ever
    (кожна гра в цій добірці зараз коштує стільки, скільки НІКОЛИ раніше не коштувала).
+   Окремі DLC/Season Pass відсіюються вже тут - постимо лише повні ігри й повні видання.
 2. Пропускає ігри, які вже публікувались або вже точно визнані "непопулярними" (дедуп
    у discount_state.json). Технічні збої парсингу НЕ позначають гру назавжди пропущеною -
    такі ігри просто спробуються ще раз наступного запуску.
-3. Для кожної нової гри йде на її сторінку psprices.com і бере:
-   - офіційну обкладинку гри (пряме посилання на CDN PlayStation),
-   - оцінки Metacritic / OpenCritic (показник того, наскільки гра відома),
-   - жанр (щоб відсіяти Adult-контент), видавця, ціни, знижку, дату закінчення акції,
-   - список вмісту (якщо це бандл/видання з кількох ігор чи сюжетних DLC).
-4. Залишає тільки більш-менш популярні / хайпові ігри:
-   - або Metacritic, або OpenCritic оцінка є і становить 70+,
-   - або (якщо оцінок немає чи вони нижчі) питає Claude, чи це все одно відома/хайпова гра.
-5. Для гри, що пройшла фільтр, додатково заходить на офіційну сторінку store.playstation.com
-   (посилання з psprices.com веде саме туди) і бере звідти офіційну англійську/локалізовану
-   назву та канонічне посилання - бо назви на psprices.com часто перекладені українською
-   не так, як у самому PS Store.
-6. Просить Claude написати текст поста в стилі каналу (з готовими фактами, включно з
-   відфільтрованим списком вмісту бандла).
-7. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
-8. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
+3. Для кожної нової гри йде на її сторінку psprices.com і бере: обкладинку, оцінки
+   Metacritic/OpenCritic, жанр (щоб відсіяти Adult), видавця, ціни, знижку, дату
+   закінчення акції, список вмісту (якщо це бандл/видання).
+4. Залишає тільки більш-менш популярні/хайпові ігри - або Metacritic/OpenCritic 70+,
+   або (якщо оцінок немає чи вони нижчі) підтвердження від Claude, що гра дійсно широко
+   відома. Кожній такій грі присвоюється "рейтинг" (критична оцінка, або занижений
+   умовний бал для інді без оцінок, підтверджених лише Claude).
+
+Фаза 2 - публікація:
+5. Усі, хто пройшов фільтр, сортуються за рейтингом - ігри з підтвердженою високою
+   оцінкою критиків йдуть першими, менш перевірені інді-хіти - в кінець черги.
+6. Для кожної (в порядку сортування, поки не досягнуто ліміту) додатково заходить на
+   офіційну сторінку store.playstation.com і бере звідти офіційну англійську назву,
+   канонічне посилання та обкладинку в оригінальній якості (надійніше за psprices.com).
+   Якщо код товару вказує на DLC (навіть якщо це не впіймалось на етапі списку) - пропускає.
+7. Просить Claude написати текст поста в стилі каналу і перевіряє, що текст не порожній.
+8. Публікує пост (фото + підпис) у приватний Telegram-канал-чернетку для знижок.
+9. Зупиняється, коли опубліковано MAX_POSTS_PER_RUN постів за цей запуск.
 
 Секрети, які потрібні в GitHub Actions (Settings -> Secrets and variables -> Actions):
 - TG_TOKEN            (той самий токен бота, що і в rss_bot.py)
@@ -60,7 +63,9 @@ STATE_FILE = "discount_state.json"
 LIST_URL = "https://psprices.com/region-ua/collection/lowest-prices-ever"
 PAGES_TO_CHECK = 5           # список відсортований за останнім оновленням - нові ігри зверху
 CRITIC_SCORE_THRESHOLD = 70  # мін. Metacritic/OpenCritic, щоб вважати гру популярною без питання Claude
-MAX_POSTS_PER_RUN = 16       # запобіжник від надмірної кількості постів за один прогін
+CLAUDE_APPROVED_SCORE = 65   # умовний "рейтинг" для ігор без критичних оцінок, схвалених Claude -
+                              # свідомо нижче за CRITIC_SCORE_THRESHOLD, щоб такі ігри йшли в кінець черги
+MAX_POSTS_PER_RUN = 18       # ліміт постів за прогін (~35/міс при 2 запусках на місяць)
 IGNORE_GENRES = {"adult"}
 
 HEADERS = {
@@ -167,11 +172,16 @@ def save_state(state):
 
 # ---------- Крок 1: список кандидатів ----------
 
-CARD_RE = re.compile(r'href="(/region-ua/game/(\d+)/[^"]+)"', re.DOTALL)
+CARD_RE = re.compile(r'href="(/region-ua/game/(\d+)/[^"]+)"')
+# мітка типу контенту (DLC/Season Pass/Add-on) стоїть одразу біля картки на сторінці списку,
+# ПІСЛЯ основного посилання на гру - перевіряємо шматок тексту між цією карткою і наступною
+CONTENT_TYPE_LABELS = ("DLC", "Season Pass", "Add-On", "Add-on")
 
 
 def fetch_candidates():
-    """Повертає список {id, url} з перших кількох сторінок добірки 'найнижча ціна'."""
+    """Повертає список {id, url} з перших кількох сторінок добірки 'найнижча ціна'.
+    Окремі DLC/Season Pass/доповнення відсіюються одразу тут - постимо лише повні ігри
+    та повні видання (Gold/Complete/Deluxe тощо), ніколи не самостійні DLC."""
     candidates = []
     seen_ids = set()
     for page in range(1, PAGES_TO_CHECK + 1):
@@ -182,14 +192,30 @@ def fetch_candidates():
             print(f"[fetch_candidates] сторінка {page} не завантажилась, зупиняюсь")
             break
         page_matches = 0
-        for path, game_id in CARD_RE.findall(resp.text):
+        page_dlc_skipped = 0
+        matches = list(CARD_RE.finditer(resp.text))
+        for i, m in enumerate(matches):
+            path, game_id = m.group(1), m.group(2)
             if game_id in seen_ids:
                 continue
             seen_ids.add(game_id)
+
+            # шматок HTML одразу після цієї картки, до наступної (або 500 символів) -
+            # там знаходяться бейджі на кшталт "Metacritic"/"Pro"/"DLC"
+            chunk_end = matches[i + 1].start() if i + 1 < len(matches) else m.end() + 500
+            chunk = resp.text[m.end():chunk_end]
+            chunk_text = re.sub(r"<[^>]+>", " ", chunk)
+            if any(re.search(rf"\b{re.escape(label)}\b", chunk_text) for label in CONTENT_TYPE_LABELS):
+                page_dlc_skipped += 1
+                continue
+
             page_matches += 1
             candidates.append({"id": game_id, "url": "https://psprices.com" + path})
-        print(f"[fetch_candidates] сторінка {page}: знайдено карток ігор: {page_matches}")
-        if page_matches == 0:
+        print(
+            f"[fetch_candidates] сторінка {page}: знайдено карток ігор: {page_matches}"
+            f" (відсіяно DLC/доповнень: {page_dlc_skipped})"
+        )
+        if page_matches == 0 and page_dlc_skipped == 0:
             break  # далі, ймовірно, порожні сторінки - список скінчився
     return candidates
 
@@ -332,36 +358,55 @@ def is_adult(genre_text):
 
 # ---------- Крок 3: офіційна сторінка PlayStation Store (англійська назва) ----------
 
-def _fetch_og_title(url):
+def _fetch_og_meta(url):
+    """Повертає (title, image_url, кінцевий_url) зі сторінки store.playstation.com."""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
-        print(f"[_fetch_og_title] помилка запиту {url}: {e}")
-        return None, None
+        print(f"[_fetch_og_meta] помилка запиту {url}: {e}")
+        return None, None, None
     if resp.status_code != 200:
-        print(f"[_fetch_og_title] HTTP {resp.status_code} для {url}")
-        return None, None
+        print(f"[_fetch_og_meta] HTTP {resp.status_code} для {url}")
+        return None, None, None
     title_match = re.search(r'property="og:title" content="([^"]*)"', resp.text)
     title = title_match.group(1) if title_match else None
     if title:
         title = re.split(r"\s*\|\s*PlayStation", title)[0].strip()
-    return title, resp.url
+    image_match = re.search(r'property="og:image" content="([^"]*)"', resp.text)
+    image_url = image_match.group(1) if image_match else None
+    return title, image_url, resp.url
 
 
 def fetch_official_store_info(psprices_buy_url):
     """psprices_buy_url веде через редирект на справжню store.playstation.com сторінку.
-    Посилання для поста лишаємо українське (той регіон, де купують читачі), а от назву
-    беремо з АНГЛІЙСЬКОЇ версії тієї ж сторінки товару - бо український стор Sony теж
-    часто показує локалізовану назву (напр. "Брама Балдура 3"), а нам треба офіційну
-    англійську, як у прикладах."""
-    _ignored_title, uk_url = _fetch_og_title(psprices_buy_url)
+    Посилання і картинку для поста беремо з УКРАЇНСЬКОЇ сторінки (той регіон, де купують
+    читачі, і там оригінальна якість обкладинки з CDN Sony, іноді краща за ту, що
+    показує psprices.com). Назву беремо з АНГЛІЙСЬКОЇ версії тієї ж сторінки товару - бо
+    український стор Sony теж часто показує локалізовану назву (напр. "Брама Балдура 3"),
+    а нам треба офіційну англійську, як у прикладах."""
+    _ignored_title, image_url, uk_url = _fetch_og_meta(psprices_buy_url)
     if not uk_url:
-        return None, None
+        return None, None, None
 
     en_url = re.sub(r"/uk-ua/", "/en-us/", uk_url, count=1)
-    en_title, _ = _fetch_og_title(en_url) if en_url != uk_url else (None, None)
+    en_title, _ignored_image, _ = _fetch_og_meta(en_url) if en_url != uk_url else (None, None, None)
 
-    return en_title, uk_url
+    return en_title, uk_url, image_url
+
+
+PRODUCT_CODE_RE = re.compile(r"/product/([^/?]+)")
+
+
+def is_dlc_product_url(url):
+    """Коди товарів DLC/доповнень у PS Store часто містять сегмент 'DLC' (напр.
+    '...-DLC0000000000000'). Це надійніший сигнал, ніж бейджі на сторінці списку,
+    які іноді пропускають окремі випадки."""
+    if not url:
+        return False
+    m = PRODUCT_CODE_RE.search(url)
+    if not m:
+        return False
+    return bool(re.search(r"-DLC\d", m.group(1), re.IGNORECASE))
 
 
 # ---------- Крок 4: фільтр популярності ----------
@@ -384,13 +429,15 @@ def looks_popular_enough(detail):
 
 def ask_claude_is_popular(title, publisher):
     """Для ігор без достатньо високої критичної оцінки - питаємо Claude, чи це все одно
-    відома/хайпова гра (в т.ч. інді-хіти)."""
+    відома/хайпова гра (в т.ч. інді-хіти). Поріг навмисно високий - середньостатистична
+    "непогана інді-гра" НЕ повинна проходити, тільки дійсно широковідомі назви."""
     prompt = (
         f'Гра називається "{title}"'
         + (f" (видавець: {publisher})" if publisher else "")
-        + ". Чи є ця гра достатньо відомою/популярною/хайповою серед геймерів PlayStation, "
-        "щоб про знижку на неї варто було написати пост у геймерському Telegram-каналі? "
-        "Враховуй і AAA-тайтли, і відомі інді-хіти. "
+        + ". Чи є ця гра ДІЙСНО широко відомою серед геймерів PlayStation - тобто більшість "
+        "геймерів впізнає назву або хоча б чула про неї (вірусна, культова, багато обговорювана, "
+        "великий інді-хіт з мільйонними продажами)? Це НЕ про \"непогану, якісну гру\" - таких "
+        "багато, а саме про широку впізнаваність. Якщо сумніваєшся - відповідай \"ні\". "
         'Відповідай ЛИШЕ одним словом: "так" або "ні".'
     )
     resp = anthropic_client.messages.create(
@@ -474,13 +521,10 @@ def main():
     candidates = fetch_candidates()
     print(f"Знайдено кандидатів на сторінках списку: {len(candidates)}")
 
-    posted_this_run = 0
+    # ---- Фаза 1: зібрати й оцінити всіх кандидатів, нікого ще не постимо ----
+    eligible = []  # [{id, detail, score}]
 
     for c in candidates:
-        if posted_this_run >= MAX_POSTS_PER_RUN:
-            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
-            break
-
         game_id = c["id"]
         if game_id in posted_ids or game_id in skipped_ids:
             continue
@@ -507,23 +551,58 @@ def main():
             skipped_ids.add(game_id)
             continue
 
-        popular = looks_popular_enough(detail)
-        if not popular:
-            popular = ask_claude_is_popular(detail["title"], detail["publisher"])
-
-        if not popular:
+        best_critic_score = max(
+            [s for s in (detail["metacritic"], detail["opencritic"]) if s is not None],
+            default=None,
+        )
+        if best_critic_score is not None and best_critic_score >= CRITIC_SCORE_THRESHOLD:
+            score = best_critic_score
+        elif ask_claude_is_popular(detail["title"], detail["publisher"]):
+            score = CLAUDE_APPROVED_SCORE
+        else:
             skipped_ids.add(game_id)
             continue
 
-        # для фінальних кандидатів беремо офіційну назву й посилання зі store.playstation.com
-        official_title, official_url = fetch_official_store_info(detail["buy_url"])
+        eligible.append({"id": game_id, "detail": detail, "score": score})
+
+    # ---- Фаза 2: найкращі (за оцінкою критиків) публікуються першими ----
+    eligible.sort(key=lambda x: x["score"], reverse=True)
+    print(f"Пройшли фільтр популярності: {len(eligible)}, з них опублікуємо до {MAX_POSTS_PER_RUN}")
+
+    posted_this_run = 0
+
+    for item in eligible:
+        if posted_this_run >= MAX_POSTS_PER_RUN:
+            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
+            break
+
+        game_id = item["id"]
+        detail = item["detail"]
+
+        # для фінальних кандидатів беремо офіційну назву, посилання і картинку
+        # зі store.playstation.com (надійніше і якісніше за psprices.com)
+        official_title, official_url, official_image = fetch_official_store_info(detail["buy_url"])
         final_title = official_title or detail["title"]
         final_url = official_url or detail["buy_url"]
-        formatted_date = format_ukrainian_date(detail["ends_date"])
+        final_image = official_image or detail["image_url"]
 
+        if is_dlc_product_url(final_url):
+            print(f"[main] {final_title}: код товару вказує на DLC, пропускаю остаточно")
+            skipped_ids.add(game_id)
+            state["skipped_ids"] = list(skipped_ids)
+            save_state(state)
+            continue
+
+        formatted_date = format_ukrainian_date(detail["ends_date"])
         post_text = generate_post_text(detail, final_title, final_url, formatted_date)
 
-        ok = send_to_telegram(post_text, detail["image_url"])
+        # захист від порожнього/зламаного тексту (напр. якщо Claude нічого не повернув) -
+        # краще пропустити цей запуск і спробувати ще раз, ніж постити голу картинку
+        if not post_text or len(post_text) < 30 or "UAH" not in post_text:
+            print(f"[main] підозріло короткий/порожній текст для {final_title}, пропускаю цей запуск", file=sys.stderr)
+            continue
+
+        ok = send_to_telegram(post_text, final_image)
         if ok:
             print(f"Опубліковано: {final_title}")
             posted_ids.add(game_id)
