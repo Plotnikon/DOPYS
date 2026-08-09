@@ -1,0 +1,389 @@
+"""
+thisday_bot.py
+
+Рубрика "Цього дня" для каналу "Синдром Гравця".
+
+Розрахований на РІДКІ запуски (1 числа кожного місяця) - за один запуск генерує пости
+для КОЖНОГО дня місяця, що починається (1-28/30/31), про легендарні/культові ігри, які
+офіційно вийшли саме в цей день місяця (в будь-якому році). Дні без по-справжньому гучних
+релізів просто пропускаються - без порожніх постів.
+
+Формат поста (рівно одне речення, без нічого зайвого):
+🎉Цього дня, 26 січня 2010 року, відбувся реліз Mass Effect 2.
+
+Якщо в один день вийшло кілька культових ігор (в різні роки) - кожна йде окремим постом.
+
+Що робить:
+1. Отримує токен доступу до IGDB API (Twitch Client Credentials flow) - живе типово ~60 днів,
+   тому просто отримуємо новий на кожен запуск, без кешування.
+2. Для місяця, що починається, проходить по роках від START_YEAR до поточного і для кожного
+   року запитує в IGDB (games endpoint) усі ОСНОВНІ ігри (category = 0, тобто не DLC/порт/
+   ремастер/пак і т.д.) з датою релізу в цьому місяці цього року. Для поточного року - не
+   заходить за межі "зараз", щоб не написати про гру, яка ще не вийшла.
+3. Групує знайдені ігри по дню місяця (день релізу).
+4. Попередньо відсіює зовсім невідомі/нішеві ігри по метриках IGDB (рейтинг критиків/
+   користувачів, кількість "фоловерів"/антісипації) - це лише грубий перший фільтр, щоб не
+   ганяти Claude на явне сміття.
+5. Для кожного кандидата, що пройшов попередній відсів, питає Claude: чи це ДІЙСНО легендарна/
+   культова/загальновідома гра - висока оцінка сама по собі НЕ доказ хайпу (той самий урок,
+   що і з рубрикою знижок: нішеві ігри теж можуть мати непогані оцінки). Поріг навмисно
+   високий.
+6. Для тих, хто пройшов - формує текст поста за жорстким шаблоном (без участі Claude, щоб
+   формат ніколи не "поплив") і бере офіційний бокс-арт з IGDB у максимальній якості.
+7. Публікує всі готові пости (фото + підпис) у приватний Telegram-канал-чернетку, з паузою
+   між повідомленнями, щоб не впертись у ліміти Telegram.
+8. Дедуп (thisday_state.json, комітиться в репозиторій, як і в інших ботах): posted_ids -
+   вже опубліковані ігри (ніколи не повторюються), skipped_ids - остаточно визнані
+   "недостатньо легендарними" (якщо пізніше зміниш поріг у ask_claude_is_legendary - можна
+   вручну очистити skipped_ids в файлі на GitHub, щоб їх переоцінили за новою логікою).
+
+Секрети, які потрібні в GitHub Actions (Settings -> Secrets and variables -> Actions):
+- TG_TOKEN             (той самий токен бота, що і в rss_bot.py/discount_bot.py)
+- THISDAY_TG_CHAT      (chat_id каналу-чернетки для рубрики "цього дня")
+- IGDB_CLIENT_ID       (з Twitch Developer Console)
+- IGDB_CLIENT_SECRET   (з Twitch Developer Console)
+- ANTHROPIC_API_KEY    (той самий ключ, що і в інших ботах)
+"""
+
+import calendar
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+
+import requests
+from anthropic import Anthropic
+
+# ---------- Налаштування ----------
+
+TG_TOKEN = os.environ["TG_TOKEN"]
+CHAT_ID = os.environ["THISDAY_TG_CHAT"]
+IGDB_CLIENT_ID = os.environ["IGDB_CLIENT_ID"]
+IGDB_CLIENT_SECRET = os.environ["IGDB_CLIENT_SECRET"]
+ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+
+CLAUDE_MODEL = "claude-sonnet-5"
+
+STATE_FILE = "thisday_state.json"
+
+START_YEAR = 1980            # з якого року шукати релізи
+MAX_POSTS_PER_RUN = 40        # запобіжник (орієнтовно ~30-31 пост за місяць, з запасом)
+IGDB_MAIN_GAME_CATEGORY = 0   # у IGDB: 0 = основна гра (не DLC/порт/ремастер/пак тощо)
+
+# грубий перший фільтр по метриках IGDB - лише щоб не ганяти Claude на явне ноунейм сміття,
+# НЕ підстава для автоматичного схвалення (фінальне рішення завжди за Claude)
+MIN_TOTAL_RATING = 65
+MIN_AGGREGATED_RATING = 65
+MIN_FOLLOWS = 150
+MIN_HYPES = 30
+
+HEADERS_HTML = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
+
+UKRAINIAN_MONTHS_GENITIVE = {
+    1: "січня", 2: "лютого", 3: "березня", 4: "квітня", 5: "травня", 6: "червня",
+    7: "липня", 8: "серпня", 9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня",
+}
+
+anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+# ---------- Стан / дедуп ----------
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"posted_ids": [], "skipped_ids": []}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+# ---------- Крок 1: авторизація в IGDB (через Twitch) ----------
+
+def get_igdb_token():
+    resp = requests.post(
+        "https://id.twitch.tv/oauth2/token",
+        params={
+            "client_id": IGDB_CLIENT_ID,
+            "client_secret": IGDB_CLIENT_SECRET,
+            "grant_type": "client_credentials",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def igdb_query(token, endpoint, body):
+    """Запит до IGDB API (Apicalypse-синтаксис у тілі запиту)."""
+    resp = requests.post(
+        f"https://api.igdb.com/v4/{endpoint}",
+        headers={
+            "Client-ID": IGDB_CLIENT_ID,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+        data=body,
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        print(f"[igdb_query] {endpoint}: HTTP {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        return []
+    return resp.json()
+
+
+# ---------- Крок 2: збір ігор для місяця, що починається ----------
+
+def fetch_games_for_month(token, target_month):
+    """Повертає {день_місяця: [ігри]} - для кожного року від START_YEAR до поточного
+    запитує в IGDB усі ОСНОВНІ ігри (не DLC/порти/ремастери), що вийшли в цьому місяці
+    цього року, і групує їх по дню релізу. Для поточного року не заходить у майбутнє."""
+    now = datetime.now(timezone.utc)
+    current_year = now.year
+
+    games_by_day = {}
+    seen_game_ids = set()
+
+    for year in range(START_YEAR, current_year + 1):
+        month_start = datetime(year, target_month, 1, tzinfo=timezone.utc)
+        if target_month == 12:
+            month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            month_end = datetime(year, target_month + 1, 1, tzinfo=timezone.utc)
+
+        if year == current_year:
+            month_end = min(month_end, now)  # не заходити в ще не вийшлі ігри
+        if month_start >= month_end:
+            continue
+
+        offset = 0
+        while True:
+            body = f"""
+                fields name, first_release_date, cover.image_id, aggregated_rating,
+                       total_rating, follows, hypes,
+                       involved_companies.company.name, involved_companies.developer,
+                       involved_companies.publisher, category;
+                where first_release_date >= {int(month_start.timestamp())}
+                    & first_release_date < {int(month_end.timestamp())}
+                    & category = {IGDB_MAIN_GAME_CATEGORY};
+                limit 500;
+                offset {offset};
+            """
+            results = igdb_query(token, "games", body)
+            for g in results:
+                game_id = g.get("id")
+                if game_id is None or game_id in seen_game_ids:
+                    continue
+                seen_game_ids.add(game_id)
+                ts = g.get("first_release_date")
+                if ts is None:
+                    continue
+                release_day = datetime.fromtimestamp(ts, tz=timezone.utc).day
+                g["_year"] = datetime.fromtimestamp(ts, tz=timezone.utc).year
+                games_by_day.setdefault(release_day, []).append(g)
+
+            if len(results) < 500:
+                break
+            offset += 500
+
+        time.sleep(0.3)  # не перевищувати ліміт запитів IGDB
+
+    print(f"[fetch_games_for_month] місяць {target_month}: зібрано {len(seen_game_ids)} ігор за {current_year - START_YEAR + 1} років")
+    return games_by_day
+
+
+def passes_prefilter(game):
+    """Грубий перший фільтр по метриках IGDB - лише щоб не витрачати виклики Claude на
+    явно нішеві/невідомі ігри. НЕ підстава для автоматичного схвалення."""
+    total_rating = game.get("total_rating")
+    aggregated_rating = game.get("aggregated_rating")
+    follows = game.get("follows")
+    hypes = game.get("hypes")
+    return (
+        (total_rating is not None and total_rating >= MIN_TOTAL_RATING)
+        or (aggregated_rating is not None and aggregated_rating >= MIN_AGGREGATED_RATING)
+        or (follows is not None and follows >= MIN_FOLLOWS)
+        or (hypes is not None and hypes >= MIN_HYPES)
+    )
+
+
+def extract_companies(game):
+    names = []
+    for ic in game.get("involved_companies") or []:
+        company = (ic.get("company") or {}).get("name")
+        if company and (ic.get("publisher") or ic.get("developer")):
+            names.append(company)
+    # унікалізуємо, зберігаючи порядок
+    seen = set()
+    result = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            result.append(n)
+    return ", ".join(result) if result else None
+
+
+# ---------- Крок 3: перевірка "чи це дійсно легендарна гра" ----------
+
+def _extract_text(resp):
+    """claude-sonnet-5 інколи повертає блок 'роздумів' (thinking) першим у відповіді,
+    тому не можна покладатись на resp.content[0]."""
+    for block in resp.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    return ""
+
+
+def ask_claude_is_legendary(title, year, companies):
+    """Висока оцінка в IGDB - показник ЯКОСТІ, не впізнаваності. Багато нішевих ігор мають
+    хороші оцінки, лишаючись невідомими широкій аудиторії (той самий урок, що і з рубрикою
+    знижок). Тому фінальне рішення - завжди за цією перевіркою, незалежно від метрик IGDB."""
+    prompt = (
+        f'Гра називається "{title}", вийшла у {year} році'
+        + (f" (розробник/видавець: {companies})" if companies else "")
+        + ".\n\n"
+        "Чи ця гра ДІЙСНО легендарна/культова/широко відома серед геймерів - тобто "
+        "більшість геймерів впізнає назву або хоча б чула про неї? Це має бути помітний "
+        "AAA-реліз від великої/відомої студії чи видавця, або справжній культовий/вірусний "
+        "хіт (в т.ч. інді, якщо він дійсно широко відомий, напр. Minecraft, Undertale, "
+        "Stardew Valley).\n\n"
+        "ВАЖЛИВО: непогана чи навіть висока оцінка критиків сама по собі НЕ означає широку "
+        "відомість - середньостатистична 'якісна, але нішева гра' повинна отримати 'ні'. "
+        "Якщо сумніваєшся - відповідай \"ні\". "
+        'Відповідай ЛИШЕ одним словом: "так" або "ні".'
+    )
+    resp = anthropic_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=10,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    answer = _extract_text(resp).strip().lower()
+    return answer.startswith("так")
+
+
+# ---------- Крок 4: текст поста і картинка ----------
+
+def format_ukrainian_date_full(day, month, year):
+    month_name = UKRAINIAN_MONTHS_GENITIVE.get(month)
+    return f"{day} {month_name} {year} року"
+
+
+def build_post_text(title, day, month, year):
+    # формат жорстко зашитий у коді (без участі Claude), щоб ніколи не "поплив"
+    formatted_date = format_ukrainian_date_full(day, month, year)
+    return f"🎉Цього дня, {formatted_date}, відбувся реліз {title}."
+
+
+def get_cover_url(image_id):
+    if not image_id:
+        return None
+    # t_original - максимальна доступна якість бокс-арту в IGDB
+    return f"https://images.igdb.com/igdb/image/upload/t_original/{image_id}.jpg"
+
+
+# ---------- Крок 5: публікація в Telegram ----------
+
+def send_to_telegram(caption, image_url):
+    api_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+    payload = {"chat_id": CHAT_ID, "photo": image_url, "caption": caption}
+    resp = requests.post(api_url, json=payload, timeout=30)
+
+    if resp.status_code == 429:
+        retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+        print(f"[send_to_telegram] flood control, чекаю {retry_after}с")
+        time.sleep(retry_after + 1)
+        resp = requests.post(api_url, json=payload, timeout=30)
+
+    if resp.status_code != 200 or not resp.json().get("ok"):
+        fallback_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        resp = requests.post(
+            fallback_url,
+            json={"chat_id": CHAT_ID, "text": caption},
+            timeout=30,
+        )
+    return resp.status_code == 200 and resp.json().get("ok")
+
+
+# ---------- main ----------
+
+def main():
+    state = load_state()
+    posted_ids = set(state["posted_ids"])
+    skipped_ids = set(state["skipped_ids"])
+    save_state(state)  # гарантуємо, що файл стану існує з першого запуску
+
+    target_month = datetime.now(timezone.utc).month
+    days_in_month = calendar.monthrange(datetime.now(timezone.utc).year, target_month)[1]
+
+    token = get_igdb_token()
+    games_by_day = fetch_games_for_month(token, target_month)
+
+    posted_this_run = 0
+
+    for day in range(1, days_in_month + 1):
+        if posted_this_run >= MAX_POSTS_PER_RUN:
+            print(f"Досягнуто ліміту {MAX_POSTS_PER_RUN} постів за прогін, зупиняюсь")
+            break
+
+        candidates = games_by_day.get(day, [])
+        # у межах дня - в хронологічному порядку років
+        candidates.sort(key=lambda g: g["_year"])
+
+        for game in candidates:
+            if posted_this_run >= MAX_POSTS_PER_RUN:
+                break
+
+            game_id = str(game["id"])
+            if game_id in posted_ids or game_id in skipped_ids:
+                continue
+
+            if not passes_prefilter(game):
+                continue  # технічно/метрично не пройшло - не позначаємо остаточно, спробуємо ще раз
+
+            title = game.get("name")
+            image_id = (game.get("cover") or {}).get("image_id")
+            if not title or not image_id:
+                continue  # без назви чи картинки постити нічого - спробуємо ще раз наступного разу
+
+            year = game["_year"]
+            companies = extract_companies(game)
+
+            if not ask_claude_is_legendary(title, year, companies):
+                print(f"[main] {title} ({year}): недостатньо легендарна гра, пропускаю остаточно")
+                skipped_ids.add(game_id)
+                state["skipped_ids"] = list(skipped_ids)
+                save_state(state)
+                continue
+
+            image_url = get_cover_url(image_id)
+            post_text = build_post_text(title, day, target_month, year)
+
+            ok = send_to_telegram(post_text, image_url)
+            if ok:
+                print(f"Опубліковано: {title} ({year}), {day} число")
+                posted_ids.add(game_id)
+                posted_this_run += 1
+            else:
+                print(f"Не вдалось опублікувати: {title}", file=sys.stderr)
+                # тимчасова помилка Telegram - не позначаємо остаточно, спробуємо ще раз
+
+            state["posted_ids"] = list(posted_ids)
+            state["skipped_ids"] = list(skipped_ids)
+            save_state(state)
+
+            time.sleep(1.2)  # пауза між повідомленнями, щоб не впертись у ліміти Telegram
+
+    print(f"Готово. Опубліковано нових постів: {posted_this_run}")
+
+
+if __name__ == "__main__":
+    main()
