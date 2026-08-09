@@ -123,22 +123,34 @@ def get_igdb_token():
     return resp.json()["access_token"]
 
 
+_debug_dumped = False
+
+
 def igdb_query(token, endpoint, body):
     """Запит до IGDB API (Apicalypse-синтаксис у тілі запиту)."""
+    global _debug_dumped
     resp = requests.post(
         f"https://api.igdb.com/v4/{endpoint}",
         headers={
             "Client-ID": IGDB_CLIENT_ID,
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
+            "Content-Type": "text/plain",
         },
-        data=body,
+        data=body.encode("utf-8"),
         timeout=30,
     )
     if resp.status_code != 200:
-        print(f"[igdb_query] {endpoint}: HTTP {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        print(f"[igdb_query] {endpoint}: HTTP {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
         return []
-    return resp.json()
+    rows = resp.json()
+    if not _debug_dumped:
+        # одноразовий діагностичний дамп - щоб бачити, що ІГДБ реально повертає,
+        # якщо запити "успішні", але порожні
+        print(f"[igdb_query DEBUG] endpoint={endpoint}, body={body.strip()[:300]!r}")
+        print(f"[igdb_query DEBUG] HTTP {resp.status_code}, {len(rows)} рядків, сира відповідь: {resp.text[:1000]}")
+        _debug_dumped = True
+    return rows
 
 
 # ---------- Крок 2: збір ігор для місяця, що починається ----------
