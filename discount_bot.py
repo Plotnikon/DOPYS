@@ -142,9 +142,10 @@ STYLE_GUIDE = """
 - Останнє речення ЗАВЖДИ має вигляд: "Це найбільша знижка Z% з моменту релізу гри/бандлу,
   дійсна до ДАТА." - дата вже буде надана в готовому українському форматі (напр. "1 липня"),
   просто встав її як є. Це речення ніколи не можна пропускати чи скорочувати.
-- Виведи ЛИШЕ готовий текст поста у форматі Telegram Markdown (parse_mode=Markdown):
-  [текст](посилання) для лінків, *текст* для виділення дужок з вмістом бандла. Без
-  пояснень від себе, без обгортки у потрійні лапки ```.
+- Пост надсилається БЕЗ обробки форматування - [текст](посилання) і *текст* мають лишитись
+  видимими в повідомленні як звичайний текст (символи [ ] ( ) *), а не перетворюватись на
+  клікабельне посилання чи жирний шрифт. Це навмисно - це чернетка для ручного review.
+- Виведи ЛИШЕ готовий текст поста, без пояснень від себе, без обгортки у потрійні лапки ```.
 """
 
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -435,12 +436,13 @@ def generate_post_text(detail, final_title, final_url, formatted_date):
 # ---------- Крок 6: публікація в Telegram ----------
 
 def send_to_telegram(caption, image_url):
+    # Без parse_mode навмисно: Денис хоче бачити в чернетці сирий текст
+    # ([Назва](URL), *(...)*) як є, а не готове відрендерене посилання.
     api_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
     payload = {
         "chat_id": DRAFT_CHAT_ID,
         "photo": image_url,
         "caption": caption,
-        "parse_mode": "Markdown",
     }
     resp = requests.post(api_url, json=payload, timeout=30)
     if resp.status_code != 200 or not resp.json().get("ok"):
@@ -451,7 +453,6 @@ def send_to_telegram(caption, image_url):
             json={
                 "chat_id": DRAFT_CHAT_ID,
                 "text": caption,
-                "parse_mode": "Markdown",
                 "disable_web_page_preview": False,
             },
             timeout=30,
